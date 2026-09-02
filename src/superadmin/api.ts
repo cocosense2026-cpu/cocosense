@@ -2,7 +2,7 @@
 // (server/routes/superadmin.js). Mirrors src/admin/api.ts and
 // src/owner/api.ts.
 
-export const SUPERADMIN_API_BASE = 'http://localhost:4000/api';
+export const SUPERADMIN_API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000') + '/api';
 const TOKEN_KEY = 'cocosense_superadmin_token';
 
 export function getSuperAdminToken(): string | null {

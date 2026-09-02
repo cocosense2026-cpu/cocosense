@@ -5,7 +5,7 @@
 // to drive (wrong password, expired code, etc.), unlike the admin
 // console's toast-and-move-on pattern.
 
-export const OWNER_API_BASE = 'http://localhost:4000/api';
+export const OWNER_API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000') + '/api';
 const TOKEN_KEY = 'cocosense_owner_token';
 
 export function getOwnerToken(): string | null {
