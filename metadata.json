@@ -1,0 +1,6 @@
+{
+  "name": "CocoSense - Smart Plantation & Pest Monitor",
+  "description": "IoT bioacoustic pest detection and plantation telemetry management system with live sensor radar, piezoelectric vibration analytics, farm owner portal, and mesh node health.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

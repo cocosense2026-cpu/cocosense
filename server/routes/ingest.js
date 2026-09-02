@@ -1,0 +1,127 @@
+import { Router } from 'express';
+import { db } from '../db.js';
+import { severityForGrams } from '../utils.js';
+
+const router = Router();
+
+// Turn a raw LoRa RSSI (dBm) reading into the same human-readable label
+// format the dashboard already displays (e.g. "-62 dBm (Strong)") --
+// ported from the old PHP ingest endpoint's signal-quality mapping so a
+// real device's readings show up in the UI exactly like the seed/mock
+// data already does, instead of the bare "online" flag we had before.
+function signalLabelFor(rssi) {
+  const tier = rssi >= -70 ? 'Excellent' : rssi >= -90 ? 'Good' : rssi >= -110 ? 'Fair' : 'No Signal';
+  return `${rssi} dBm (${tier})`;
+}
+
+// The ESP32 firmware already POSTs this exact JSON shape:
+//   { api_key, node_id, sector, grams, battery, rssi, pest_likely, pest_clicks, pest_band_ratio }
+// so this endpoint is a drop-in target -- just change serverURL in the
+// sketch to point here (see README "Connecting the device"). `battery`
+// and `rssi` are optional -- omit them and the node's existing values
+// are left untouched.
+router.post('/ingest-vibration', async (req, res) => {
+  const {
+    api_key,
+    node_id,
+    sector,
+    grams,
+    battery,
+    rssi,
+    pest_likely,
+    pest_clicks,
+    pest_band_ratio,
+  } = req.body || {};
+
+  const expectedKey = process.env.DEVICE_API_KEY || 'Luna-1327';
+  if (!api_key || api_key !== expectedKey) {
+    return res.status(401).json({ ok: false, error: 'invalid api_key' });
+  }
+  if (typeof grams !== 'number' || Number.isNaN(grams)) {
+    return res.status(400).json({ ok: false, error: 'grams (number) is required' });
+  }
+  if (!node_id) {
+    return res.status(400).json({ ok: false, error: 'node_id is required' });
+  }
+
+  const severity = severityForGrams(grams);
+  const pestLikely = !!pest_likely;
+
+  // 1. Always log the raw reading -- this is what powers charts /
+  //    "recent logs", independent of severity or pest match.
+  await db.prepare(
+    `INSERT INTO vibration_events (sector, node_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sector ?? null,
+    node_id,
+    grams,
+    severity,
+    pestLikely ? 1 : 0,
+    pest_clicks ?? null,
+    pest_band_ratio ?? null
+  );
+
+  // Keep master_nodes' live health snapshot fresh if this node is already
+  // registered. battery/signal are only touched when the device actually
+  // sent them -- COALESCE keeps whatever was there before otherwise, so
+  // an older/simpler sketch that only sends grams doesn't blank them out.
+  const batteryPercent = battery != null ? Math.max(0, Math.min(100, Math.round(Number(battery)))) : null;
+  const signalRssi = rssi != null ? signalLabelFor(Math.round(Number(rssi))) : null;
+
+  await db.prepare(
+    `UPDATE master_nodes
+     SET last_ping = datetime('now'),
+         online = 1,
+         battery_percent = COALESCE(?, battery_percent),
+         signal_rssi = COALESCE(?, signal_rssi)
+     WHERE id = ?`
+  ).run(batteryPercent, signalRssi, node_id);
+
+  // 2. Impact/tamper alert -- logged for ANY non-normal hit, regardless
+  //    of pest match. Goes to Alert History, NOT to notifications.
+  if (severity !== 'Normal') {
+    await db.prepare(
+      `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
+       VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
+    ).run(
+      `${severity} Impact Detected`,
+      sector ?? null,
+      node_id,
+      severity.toUpperCase(),
+      `Piezo sensor on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
+      grams
+    );
+  }
+
+  // 3. Pest alert + notification -- deliberately SEPARATE from the impact
+  //    check above. Only a real feeding-pattern match creates a
+  //    notification (bell icon) / would light up a pest-only dashboard
+  //    banner; an ordinary knock never does, even if it's severe.
+  if (pestLikely) {
+    await db.prepare(
+      `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
+       VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
+    ).run(
+      'Pest Feeding Pattern Detected',
+      sector ?? null,
+      node_id,
+      `Piezo sensor on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+        (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
+        (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : ''),
+      grams
+    );
+
+    await db.prepare(
+      `INSERT INTO notifications (icon, title, message, category)
+       VALUES ('alert-triangle', ?, ?, 'pest')`
+    ).run(
+      'Pest Feeding Pattern Detected',
+      `${sector ?? node_id} (${node_id}) matched a sustained feeding-pattern signature.`
+    );
+  }
+
+  res.json({ ok: true, severity, pest_likely: pestLikely });
+});
+
+export default router;

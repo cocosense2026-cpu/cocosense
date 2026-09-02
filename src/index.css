@@ -1,0 +1,369 @@
+@import "tailwindcss";
+
+:root, .dark, [data-theme="dark"] {
+  --bg-app: #0A0A0A;
+  --bg-surface: #141414;
+  --bg-surface-elevated: #1A1A1A;
+  --bg-nested: #0E0E0E;
+  --border-app: #262626;
+  --border-subtle: #333333;
+  --text-primary: #FFFFFF;
+  --text-body: #E0E0E0;
+  --text-muted: #808080;
+  --accent-gold: #D4AF37;
+  --accent-gold-hover: #E5C158;
+  --accent-gold-muted: rgba(212, 175, 55, 0.15);
+  --crit-bg: #2B1B1B;
+  --crit-text: #F44336;
+  --crit-border: rgba(244, 67, 54, 0.35);
+  --success-bg: #142416;
+  --success-text: #4CAF50;
+  --success-border: rgba(76, 175, 80, 0.35);
+  color-scheme: dark;
+}
+
+.light, [data-theme="light"] {
+  --bg-app: #F5F7FA;
+  --bg-surface: #FFFFFF;
+  --bg-surface-elevated: #ECEFF3;
+  --bg-nested: #F1F4F8;
+  --border-app: #E2E8F0;
+  --border-subtle: #CBD5E1;
+  --text-primary: #0F172A;
+  --text-body: #334155;
+  --text-muted: #64748B;
+  --accent-gold: #A37508;
+  --accent-gold-hover: #8C6204;
+  --accent-gold-muted: rgba(163, 117, 8, 0.12);
+  --crit-bg: #FEF2F2;
+  --crit-text: #DC2626;
+  --crit-border: rgba(220, 38, 38, 0.25);
+  --success-bg: #F0FDF4;
+  --success-text: #16A34A;
+  --success-border: rgba(22, 163, 74, 0.25);
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    background-color: var(--bg-app);
+    color: var(--text-body);
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-app);
+    color: var(--text-body);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  
+  .serif, .font-serif {
+    font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+  }
+
+  .font-editorial {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+  
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Light Theme Color Classes Overrides */
+.light body {
+  background-color: #F5F7FA !important;
+  color: #334155 !important;
+}
+
+/* ---- App/page background shades -> off-white app background ---- */
+.light .bg-\[\#0A0A0A\],
+.light .bg-\[\#08130D\],
+.light .bg-\[\#050D09\],
+.light .bg-\[\#09150E\],
+.light .bg-\[\#0A1810\],
+.light .bg-\[\#08120B\],
+.light .bg-\[\#08120B\]\/50 {
+  background-color: #F5F7FA !important;
+}
+
+.light .bg-\[\#0E0E0E\],
+.light .bg-\[\#0E0E0E\]\/95 {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+/* ---- Card/surface background -> white card ---- */
+.light .bg-\[\#141414\] {
+  background-color: #FFFFFF !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+}
+
+.light .bg-\[\#141414\]\/30,
+.light .bg-\[\#141414\]\/40,
+.light .hover\:bg-\[\#141414\]:hover,
+.light .hover\:bg-\[\#141414\]\/30:hover,
+.light .hover\:bg-\[\#141414\]\/40:hover {
+  background-color: #F8FAFC !important;
+}
+
+/* ---- Secondary/neutral button family: base -> soft slate, hover ->
+   one step darker slate. This is the family that was going solid black
+   on hover in light mode (bg-[#1A1A1A] hover:bg-[#222222] etc.) since
+   only the base shade had a light equivalent before. ---- */
+.light .bg-\[\#1A1A1A\],
+.light .bg-\[\#101010\],
+.light .bg-\[\#111111\] {
+  background-color: #F1F5F9 !important;
+}
+
+.light .hover\:bg-\[\#1A1A1A\]:hover,
+.light .hover\:bg-\[\#222222\]:hover {
+  background-color: #E2E8F0 !important;
+}
+
+.light .bg-\[\#262626\],
+.light .bg-\[\#333333\] {
+  background-color: #E2E8F0 !important;
+}
+
+.light .bg-black\/30,
+.light .bg-black\/40,
+.light .bg-black\/60,
+.light .bg-black\/80 {
+  background-color: #F8FAFC !important;
+}
+
+.light .border-\[\#262626\],
+.light .border-\[\#333333\],
+.light .border-\[\#404040\],
+.light .border-emerald-950,
+.light .border-emerald-950\/60,
+.light .border-emerald-500\/30,
+.light .border-emerald-500\/40,
+.light .divide-\[\#262626\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: #E2E8F0 !important;
+}
+
+.light .text-white {
+  color: #0F172A !important;
+}
+
+.light .text-\[\#E0E0E0\],
+.light .text-slate-200,
+.light .text-slate-300 {
+  color: #334155 !important;
+}
+
+.light .text-\[\#808080\],
+.light .text-\[\#A0A0A0\],
+.light .text-slate-400,
+.light .text-slate-500 {
+  color: #64748B !important;
+}
+
+/* ---- Gold accent ---- */
+.light .text-\[\#D4AF37\] {
+  color: #A37508 !important;
+}
+
+.light .bg-\[\#D4AF37\],
+.light .bg-\[\#D4AF37\]\/60,
+.light .bg-\[\#D4AF37\]\/80 {
+  background-color: #A37508 !important;
+  color: #FFFFFF !important;
+}
+
+.light .bg-\[\#D4AF37\]\/15 {
+  background-color: #FEF3C7 !important;
+}
+
+.light .hover\:bg-\[\#E5C158\]:hover,
+.light .hover\:bg-\[\#D4AF37\]:hover {
+  background-color: #8C6204 !important;
+}
+
+.light .border-\[\#D4AF37\],
+.light .border-\[\#D4AF37\]\/40,
+.light .border-\[\#D4AF37\]\/30 {
+  border-color: #A37508 !important;
+}
+
+/* ---- Amber/warning tint family (elevated severity, "potential"
+   states, hardware/diagnostics badges) -> soft amber wash ---- */
+.light .bg-\[\#1A1608\],
+.light .bg-\[\#1C1810\],
+.light .bg-\[\#261F0E\],
+.light .bg-\[\#262010\],
+.light .bg-\[\#2B2B1B\] {
+  background-color: #FEF3C7 !important;
+}
+
+/* ---- Danger/red family: base -> soft red wash, hover -> a touch
+   deeper red wash (was going solid near-black on hover, e.g.
+   hover:bg-[#3B1B1B], hover:bg-[#341f1f], hover:bg-[#1C1212]) ---- */
+.light .bg-\[\#2B1B1B\],
+.light .bg-\[\#1C1212\] {
+  background-color: #FEF2F2 !important;
+}
+
+.light .hover\:bg-\[\#2B1B1B\]:hover,
+.light .hover\:bg-\[\#1C1212\]:hover,
+.light .hover\:bg-\[\#3B1B1B\]:hover,
+.light .hover\:bg-\[\#341f1f\]:hover {
+  background-color: #FEE2E2 !important;
+}
+
+.light .bg-\[\#D32F2F\],
+.light .hover\:bg-\[\#D32F2F\]:hover {
+  background-color: #DC2626 !important;
+  color: #FFFFFF !important;
+}
+
+.light .text-\[\#F44336\] {
+  color: #DC2626 !important;
+}
+
+.light .bg-\[\#F44336\]\/15,
+.light .bg-\[\#F44336\]\/20 {
+  background-color: #FEE2E2 !important;
+}
+
+.light .bg-\[\#F44336\],
+.light .hover\:bg-\[\#F44336\]:hover,
+.light .bg-\[\#F44336\]\/80 {
+  background-color: #DC2626 !important;
+  color: #FFFFFF !important;
+}
+
+.light .border-\[\#F44336\]\/40,
+.light .border-\[\#F44336\]\/30 {
+  border-color: rgba(220, 38, 38, 0.25) !important;
+}
+
+/* ---- Success/green family ---- */
+.light .bg-\[\#142416\],
+.light .bg-\[\#1B2B1B\] {
+  background-color: #F0FDF4 !important;
+}
+
+.light .text-\[\#4CAF50\] {
+  color: #16A34A !important;
+}
+
+.light .border-\[\#4CAF50\]\/30 {
+  border-color: rgba(22, 163, 74, 0.25) !important;
+}
+
+.light .bg-\[\#15803D\],
+.light .hover\:bg-\[\#15803D\]:hover {
+  background-color: #16A34A !important;
+  color: #FFFFFF !important;
+}
+
+/* Form input styling in light mode */
+.light input,
+.light select,
+.light textarea {
+  background-color: #FFFFFF !important;
+  color: #0F172A !important;
+  border-color: #CBD5E1 !important;
+}
+
+.light input:focus,
+.light select:focus,
+.light textarea:focus {
+  border-color: #A37508 !important;
+}
+
+@keyframes radar-sweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes radar-ping {
+  0% {
+    transform: scale(0.2);
+    opacity: 0.9;
+  }
+  80% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.animate-radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+  transform-origin: 0% 100%;
+}
+
+.animate-radar-ping {
+  animation: radar-ping 3s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 3s ease-in-out infinite;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-app);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.25);
+  border-radius: 9999px;
+  border: 1px solid var(--border-app);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.55);
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: rgba(163, 117, 8, 0.25);
+}
+.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(163, 117, 8, 0.55);
+}
+
+/* ---- Login/auth page shell (Owner, Admin, Super Admin) ----
+   Outer frame around the login card: black in dark mode (unchanged),
+   soft light green in light mode -- the same green family as the
+   nav/top bar and the Sign In button, just a lighter tint. */
+.auth-shell {
+  background-color: #000000;
+}
+.light .auth-shell {
+  background-color: #DCFCE7 !important;
+}
+
+/* Nav/top bar that holds the logo: subtle green tint wash in dark
+   mode (unchanged), solid Sign-In-button green in light mode. */
+.auth-shell-header {
+  background: radial-gradient(circle at top left, rgba(22, 163, 74, 0.10), transparent 60%);
+}
+.light .auth-shell-header {
+  background: #16A34A !important;
+  border-bottom-color: rgba(255, 255, 255, 0.25) !important;
+}
+/* Keep the "SENSE" wordmark legible against the solid green header --
+   it's normally green-on-light-background, which disappears here. */
+.light .auth-shell-header .text-\[\#16A34A\] {
+  color: #FFFFFF !important;
+}
