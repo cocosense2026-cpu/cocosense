@@ -1,5 +1,12 @@
-import './load-env.js'; // must stay first -- see comment in that file
+import 'dotenv/config';
 import express from 'express';
+// Patches Express so errors thrown/rejected inside async route handlers
+// and middleware (e.g. requireOwnerAuth, requireAdminAuth) are caught
+// and forwarded to the error handler below, instead of becoming an
+// unhandled promise rejection that crashes the whole Node process --
+// which, on Render, would take the entire backend offline until it
+// restarts, not just fail the one request that triggered it.
+import 'express-async-errors';
 import './db.js';
 import ingestRoutes from './routes/ingest.js';
 import apiRoutes from './routes/api.js';
@@ -46,6 +53,17 @@ app.use('/api', adminRoutes);
 app.use('/api', superadminRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// Catches anything express-async-errors forwards here (errors from
+// async route handlers/middleware), plus any synchronous throws.
+// Without this, Express's default error handler still responds, but
+// with a generic HTML page -- this keeps every error response JSON,
+// matching what the frontend's fetch wrappers expect.
+app.use((err, req, res, next) => {
+  console.error('[server] Unhandled error:', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ ok: false, error: 'Something went wrong on the server. Please try again.' });
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
