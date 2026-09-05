@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Bell, CheckCheck, AlertTriangle, Bug, Mail, PartyPopper, Trash2, Clock, Inbox } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
+import { usePolling } from '../../hooks/usePolling';
 
 interface NotifItem {
   id: string;
@@ -63,6 +64,19 @@ export const NotificationsPage: React.FC = () => {
     load(filter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  // Quiet refresh (no loading spinner) so new alerts/notifications show
+  // up on their own without the page flickering every 10 seconds.
+  const quietRefresh = useCallback(() => {
+    ownerApi
+      .notifications(filter)
+      .then((res) => {
+        setNotifications(res.notifications);
+        setActiveAlertCount(res.activeAlertCount);
+      })
+      .catch(() => void 0);
+  }, [filter]);
+  usePolling(quietRefresh, 10000);
 
   const handleMarkRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));

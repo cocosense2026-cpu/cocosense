@@ -23,6 +23,7 @@ import { NotificationsView } from './views/NotificationsView';
 import { OutboxView } from './views/OutboxView';
 import { SettingsView } from './views/SettingsView';
 import { Search, Bell, Radio, AlertTriangle, Menu } from 'lucide-react';
+import { usePolling } from './hooks/usePolling';
 
 // Backend added in server/ (Express + SQLite) -- see README "Backend &
 // Database". Falls back to the old fully-local simulated behavior below
@@ -47,33 +48,61 @@ export function App() {
   // Toast Notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Load the REAL Farm Owners list from the database on start, so
-  // anyone actually saved via "Register & Dispatch Email" -- or removed
-  // via the delete button -- is reflected here instead of resetting to
-  // the bundled demo roster on every refresh. Falls back to the demo
-  // data (already in state above) if the backend isn't running.
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/owners`)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((rows: any[]) => {
-        if (cancelled) return;
-        const loaded: FarmOwner[] = rows.map((o) => ({
-          ...o,
-          accountConfirmed: !!o.accountConfirmed,
-          nodesCount: o.nodesCount ?? 0,
-          treesCount: o.treesCount ?? 0,
-          infectedTreesCount: o.infectedTreesCount ?? 0,
-        }));
-        setOwners(loaded);
+  // Load real data from the database on start, so the console reflects
+  // what's actually in Turso instead of the bundled demo/mock data
+  // (previously only the Farm Owners list did this -- Nodes, Trees,
+  // Alerts, Notifications, Outbox, and the raw Vibration log were all
+  // silently showing the static mock data forever, even in production).
+  // Falls back to the demo data already in state above if the backend
+  // isn't reachable, so nothing breaks if it's not running yet.
+  const loadAll = React.useCallback((showErrorInConsole: boolean) => {
+    const get = (path: string) =>
+      fetch(`${API_BASE}${path}`).then((res) =>
+        res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status} on ${path}`))
+      );
+
+    Promise.all([
+      get('/owners'),
+      get('/nodes'),
+      get('/trees'),
+      get('/alerts'),
+      get('/notifications'),
+      get('/outbox'),
+      get('/vibration-events?limit=100'),
+    ])
+      .then(([ownersRows, nodesRows, treesRows, alertsRows, notificationsRows, outboxRows, vibrationRows]) => {
+        setOwners(
+          ownersRows.map((o: any) => ({
+            ...o,
+            accountConfirmed: !!o.accountConfirmed,
+            nodesCount: o.nodesCount ?? 0,
+            treesCount: o.treesCount ?? 0,
+            infectedTreesCount: o.infectedTreesCount ?? 0,
+          }))
+        );
+        setNodes(nodesRows.map((n: any) => ({ ...n, online: !!n.online })));
+        setTrees(treesRows);
+        setAlerts(alertsRows.map((a: any) => ({ ...a, reviewed: !!a.reviewed })));
+        setNotifications(notificationsRows.map((n: any) => ({ ...n, isRead: !!n.isRead })));
+        setOutbox(outboxRows);
+        setVibrationEvents(vibrationRows);
       })
       .catch((err) => {
-        console.warn('Backend unreachable, showing local demo Farm Owners data:', err);
+        if (showErrorInConsole) {
+          console.warn('Backend unreachable, showing local demo data:', err);
+        }
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    loadAll(true);
+  }, [loadAll]);
+
+  // Keeps every view current with new device readings, alerts, and
+  // notifications as they arrive, without needing a manual page
+  // refresh. Pauses automatically while the browser tab isn't visible
+  // (see usePolling) so an idle tab doesn't keep polling forever.
+  usePolling(() => loadAll(false), 10000);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);

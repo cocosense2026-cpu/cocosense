@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, AlertCircle, CheckCircle, Gauge } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
+import { usePolling } from '../../hooks/usePolling';
 
 interface EventRow {
   id: string | number;
@@ -55,6 +56,14 @@ export const EventsPage: React.FC = () => {
       cancelled = true;
     };
   }, [sort]);
+
+  // Keeps this page current with new device readings as they arrive,
+  // without the visible loading spinner flashing on every refresh --
+  // only the initial load (above) shows that.
+  const refresh = useCallback(() => {
+    ownerApi.events(sort).then(setData).catch(() => void 0);
+  }, [sort]);
+  usePolling(refresh, 10000);
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
   const StatusIcon = style.icon;

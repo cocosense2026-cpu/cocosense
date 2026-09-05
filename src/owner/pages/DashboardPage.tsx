@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import { ownerApi } from '../api';
 import { useOwnerAuth } from '../context/OwnerAuthContext';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
+import { usePolling } from '../../hooks/usePolling';
 
 interface DashboardData {
   ownerName: string;
@@ -45,6 +46,11 @@ export const DashboardPage: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  const refresh = useCallback(() => {
+    ownerApi.dashboard().then(setData).catch(() => void 0);
+  }, []);
+  usePolling(refresh, 10000);
 
   const firstName = (owner?.firstName || owner?.name || 'Farm Owner').split(' ')[0];
 

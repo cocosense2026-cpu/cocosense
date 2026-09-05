@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Radio,
   Battery,
@@ -16,6 +16,7 @@ import {
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
+import { usePolling } from '../../hooks/usePolling';
 
 interface OwnerNode {
   id: string;
@@ -55,6 +56,11 @@ export const MasterNodesPage: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  const refresh = useCallback(() => {
+    ownerApi.nodes().then((res: any) => setNodes(res || [])).catch(() => void 0);
+  }, []);
+  usePolling(refresh, 10000);
 
   const onlineCount = nodes.filter((n) => n.online).length;
 
