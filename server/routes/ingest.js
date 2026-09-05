@@ -14,6 +14,30 @@ function signalLabelFor(rssi) {
   return `${rssi} dBm (${tier})`;
 }
 
+// The ESP32 firmware POSTs readings very frequently (multiple times per
+// second) and, once a pest-like pattern is detected, keeps reporting
+// pest_likely:true on every single loop for as long as the condition
+// holds -- there's no "I already reported this" state in the firmware.
+// Left unthrottled, that turns one real detection into hundreds of
+// duplicate alert/notification rows within minutes. These cooldowns
+// make sure a human only sees ONE alert per node for a given ongoing
+// condition, no matter how fast the device re-reports it. The raw
+// reading itself (vibration_events, below) is NOT throttled -- that's
+// what powers the live chart, and every real reading should show there.
+const PEST_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const IMPACT_ALERT_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
+async function recentlyAlerted(nodeId, alertType, cooldownMs) {
+  const row = await db
+    .prepare(
+      `SELECT created_at FROM alerts WHERE node_id = ? AND alert_type = ? ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(nodeId, alertType);
+  if (!row) return false;
+  const ageMs = Date.now() - new Date(row.created_at.replace(' ', 'T') + 'Z').getTime();
+  return ageMs < cooldownMs;
+}
+
 // The ESP32 firmware already POSTs this exact JSON shape:
 //   { api_key, node_id, sector, grams, battery, rssi, pest_likely, pest_clicks, pest_band_ratio }
 // so this endpoint is a drop-in target -- just change serverURL in the
@@ -80,7 +104,9 @@ router.post('/ingest-vibration', async (req, res) => {
 
   // 2. Impact/tamper alert -- logged for ANY non-normal hit, regardless
   //    of pest match. Goes to Alert History, NOT to notifications.
-  if (severity !== 'Normal') {
+  //    Throttled per-node so a sustained hard vibration doesn't create
+  //    a new alert on every single reading (see cooldown note above).
+  if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
     await db.prepare(
       `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
        VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
@@ -98,7 +124,8 @@ router.post('/ingest-vibration', async (req, res) => {
   //    check above. Only a real feeding-pattern match creates a
   //    notification (bell icon) / would light up a pest-only dashboard
   //    banner; an ordinary knock never does, even if it's severe.
-  if (pestLikely) {
+  //    Also throttled per-node -- see cooldown note above.
+  if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
     await db.prepare(
       `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
        VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
