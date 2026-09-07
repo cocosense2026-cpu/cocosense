@@ -1,7 +1,7 @@
 export type PestSeverity = 'CRITICAL' | 'WARNING' | 'INFO';
 export type TreeHealthStatus = 'No Pests' | 'Potential Infestation' | 'Active Infestation';
 export type NodeStatus = 'ONLINE' | 'OFFLINE' | 'DEGRADED';
-export type PiezoStatus = 'OPTIMAL' | 'WORKING' | 'DAMAGED' | 'CALIBRATING';
+export type PiezoStatus = 'OPTIMAL' | 'WORKING' | 'DAMAGED' | 'CALIBRATING' | 'NOT_CONNECTED';
 
 export interface FarmOwner {
   id: string; // e.g. COCO-7842

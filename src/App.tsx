@@ -260,7 +260,7 @@ export function App() {
       setOwners(prev => prev.map(o => o.id === ownerId
         ? { ...o, nodesCount: o.nodesCount + additionalNodes, treesCount: o.treesCount + (additionalNodes * 1140) }
         : o));
-      showToast(`Allocated +${additionalNodes} Master Nodes (+${additionalNodes * 6} Sensors) to ${ownerId} (backend offline — simulated locally only).`);
+      showToast(`Allocated +${additionalNodes} Master Nodes (+${additionalNodes * 4} Sensors) to ${ownerId} (backend offline — simulated locally only).`);
       return;
     }
 
@@ -277,7 +277,7 @@ export function App() {
     setOwners(prev => prev.map(o => o.id === ownerId
       ? { ...o, nodesCount: result.nodesCount, treesCount: result.treesCount }
       : o));
-    showToast(`Allocated +${additionalNodes} Master Nodes (+${additionalNodes * 6} Sensors) to ${ownerId}.`);
+    showToast(`Allocated +${additionalNodes} Master Nodes (+${additionalNodes * 4} Sensors) to ${ownerId}.`);
   };
 
   const handleResendInvite = async (owner: FarmOwner) => {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { severityForGrams } from '../utils.js';
+import { severityForGrams, piezoSensorId } from '../utils.js';
 
 const router = Router();
 
@@ -72,14 +72,15 @@ router.post('/ingest-vibration', async (req, res) => {
   const severity = severityForGrams(grams);
   const pestLikely = !!pest_likely;
 
-  // Every master node always has exactly 6 piezo transducers (S1-S6,
-  // provisioned in provisionMasterNodes). Real firmware that's only
-  // wired to one physical sensor may not send `piezo_id` at all -- in
-  // that case, attribute the reading to that node's first transducer
-  // (`{node_id}-S1`) so it still lands on a specific Vibration Events
-  // panel instead of being orphaned, while multi-sensor firmware can
-  // report each transducer separately by passing its real piezo_id.
-  const piezoSensorId = piezo_id || `${node_id}-S1`;
+  // Every master node always has exactly 4 piezo transducers, one per
+  // analog input (A0-A3 -- see PIEZO_PINS in utils.js). Real firmware
+  // that's only wired to one physical sensor may not send `piezo_id`
+  // at all -- in that case, attribute the reading to that node's A0
+  // input (its default/primary transducer) so it still lands on a
+  // specific Vibration Events panel instead of being orphaned, while
+  // multi-sensor firmware can report each transducer separately by
+  // passing its real piezo_id (e.g. "MN-N1-A2").
+  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, 'A0');
 
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
@@ -89,7 +90,7 @@ router.post('/ingest-vibration', async (req, res) => {
   ).run(
     sector ?? null,
     node_id,
-    piezoSensorId,
+    piezoSensorIdValue,
     grams,
     severity,
     pestLikely ? 1 : 0,
@@ -126,7 +127,7 @@ router.post('/ingest-vibration', async (req, res) => {
       sector ?? null,
       node_id,
       severity.toUpperCase(),
-      `Piezo sensor ${piezoSensorId} on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
+      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
       grams
     );
   }
@@ -144,7 +145,7 @@ router.post('/ingest-vibration', async (req, res) => {
       'Pest Feeding Pattern Detected',
       sector ?? null,
       node_id,
-      `Piezo sensor ${piezoSensorId} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
         (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
         (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : ''),
       grams

@@ -17,6 +17,22 @@ export function toCamel(row) {
 export const GRAMS_ELEVATED = Number(process.env.GRAMS_ELEVATED ?? 1.5);
 export const GRAMS_CRITICAL = Number(process.env.GRAMS_CRITICAL ?? 5.0);
 
+// Every master node has exactly 4 analog inputs wired for piezo
+// transducers -- A0 through A3. "Piezo N" numbering always maps to the
+// pin 1:1 (A0 = Piezo 1 ... A3 = Piezo 4) so the label is meaningful to
+// whoever is out at the tree with a multimeter, not just an arbitrary
+// index.
+export const PIEZO_PINS = ['A0', 'A1', 'A2', 'A3'];
+
+export function piezoSensorId(nodeId, pin) {
+  return `${nodeId}-${pin}`;
+}
+
+export function piezoLabel(pin) {
+  const num = PIEZO_PINS.indexOf(pin) + 1;
+  return `Piezo ${num > 0 ? num : '?'} (${pin})`;
+}
+
 export function severityForGrams(grams) {
   if (grams >= GRAMS_CRITICAL) return 'Critical';
   if (grams >= GRAMS_ELEVATED) return 'Elevated';

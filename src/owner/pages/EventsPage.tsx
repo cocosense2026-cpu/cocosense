@@ -17,14 +17,18 @@ interface EventRow {
 }
 
 // One card per PHYSICAL PIEZO TRANSDUCER. A master node always carries
-// exactly 6 of these (P1-P6) -- an owner with 2 master nodes sees 12
-// cards total, each detecting/reporting vibration independently.
-// `enabled` is false when that specific transducer is DAMAGED / not in
-// use, in which case the card is grayed out and shows no readings.
+// exactly 4 of these, one per analog input (A0-A3, labeled "Piezo 1"
+// through "Piezo 4") -- an owner with 2 master nodes sees 8 cards
+// total, each detecting/reporting vibration independently. `enabled`
+// is false when that specific transducer is DAMAGED, or when
+// sensorStatus is NOT_CONNECTED (no piezo physically wired to that
+// pin yet -- A3 ships unconnected by default). Either way the card is
+// grayed out and shows no readings.
 interface EventPanel {
   piezoId: string;
   nodeId: string;
   nodeName: string;
+  pin: string;
   sensorLabel: string;
   sensorStatus: string;
   enabled: boolean;
@@ -88,19 +92,21 @@ export const EventsPage: React.FC = () => {
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
   const StatusIcon = style.icon;
-  // Always 6 panels per master node -- one per physical piezo
-  // transducer (P1-P6), each detecting vibration independently and
-  // disabled whenever that specific sensor isn't working / isn't in
-  // use. Falls back to 6 empty placeholder panels so the page still
-  // renders its normal skeleton shape while the first load is in
-  // flight.
+  // Always 4 panels per master node -- one per physical piezo
+  // transducer wired to analog pins A0-A3, each detecting vibration
+  // independently and disabled whenever that specific sensor isn't
+  // working or has no piezo connected to its pin. Falls back to 4
+  // empty placeholder panels so the page still renders its normal
+  // skeleton shape while the first load is in flight.
+  const PIN_LABELS = ['A0', 'A1', 'A2', 'A3'];
   const panels: EventPanel[] = data?.panels?.length
     ? data.panels
-    : Array.from({ length: 6 }, (_, i) => ({
+    : PIN_LABELS.map((pin, i) => ({
         piezoId: `-${i}`,
         nodeId: '-',
         nodeName: 'Sensor 1',
-        sensorLabel: `Sensor 1 · P${i + 1}`,
+        pin,
+        sensorLabel: `Sensor 1 · Piezo ${i + 1} (${pin})`,
         sensorStatus: 'OPTIMAL',
         enabled: true,
         status: { grams: 0, severity: 'Normal', sector: '' },
@@ -133,20 +139,22 @@ export const EventsPage: React.FC = () => {
         <p className="text-xs text-[#808080] mt-1">Latest reading from {data?.status.sector ?? 'your estate'}.</p>
       </div>
 
-      {/* Vibration intensity -- always 6 cards per master node, one per
-          physical piezo transducer, each detecting vibration on its
-          own and grayed out whenever that specific sensor is disabled. */}
+      {/* Vibration intensity -- always 4 cards per master node, one per
+          physical piezo transducer wired to A0-A3, each detecting
+          vibration on its own and grayed out whenever that specific
+          sensor is disabled or not connected. */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">
             Vibration Intensity ({enabledCount}/{panels.length} sensors active)
           </span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {panels.map((panel) => {
             const panelMaxGrams = Math.max(1, ...panel.sparkline.map((s) => s.grams), 1);
             const panelBars = panel.sparkline.length ? panel.sparkline : Array(8).fill({ grams: 0, severity: 'Normal' });
             const panelStyle = SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
+            const notConnected = panel.sensorStatus === 'NOT_CONNECTED';
             return (
               <div
                 key={panel.piezoId}
@@ -159,14 +167,19 @@ export const EventsPage: React.FC = () => {
                     {panel.sensorLabel}
                   </span>
                   <span className={`px-2 py-0.5 rounded bg-[#1A1A1A] border text-[10px] font-semibold ${panelStyle.text} ${panelStyle.border}`}>
-                    {panel.enabled ? `${panel.status.grams.toFixed(1)}g · ${panel.status.severity}` : 'Disabled'}
+                    {panel.enabled
+                      ? `${panel.status.grams.toFixed(1)}g · ${panel.status.severity}`
+                      : notConnected
+                      ? 'Not Connected'
+                      : 'Disabled'}
                   </span>
                 </div>
                 {loading ? (
                   <div className="h-16 rounded bg-[#0E0E0E] border border-[#262626] animate-pulse" />
                 ) : !panel.enabled ? (
-                  <div className="h-16 flex items-center justify-center text-[11px] text-[#808080] gap-1.5">
-                    <PowerOff className="w-3.5 h-3.5" /> Sensor not working / not in use
+                  <div className="h-16 flex items-center justify-center text-[11px] text-[#808080] gap-1.5 text-center px-2">
+                    <PowerOff className="w-3.5 h-3.5 flex-shrink-0" />
+                    {notConnected ? `No piezo wired to ${panel.pin} yet` : 'Sensor not working'}
                   </div>
                 ) : (
                   <div className="flex items-end gap-1.5 h-16">

@@ -21,11 +21,24 @@ interface MasterNodesViewProps {
   nodes: MasterNode[];
 }
 
+// Sensor ids are "{nodeId}-{pin}" (A0-A3) -- pull the pin back out so
+// each tile shows a meaningful label instead of a bare index, and so a
+// NOT_CONNECTED tile (no piezo wired to that pin yet -- A3 out of the
+// box) reads differently from an actual hardware fault (DAMAGED).
+function pinOf(sensorId: string): string {
+  return sensorId.split('-').pop() ?? '';
+}
+function piezoLabel(sensorId: string): string {
+  const pin = pinOf(sensorId);
+  const num = ['A0', 'A1', 'A2', 'A3'].indexOf(pin) + 1;
+  return `Piezo ${num > 0 ? num : '?'} (${pin})`;
+}
+
 export const MasterNodesView: React.FC<MasterNodesViewProps> = ({ nodes }) => {
   const [viewedNode, setViewedNode] = useState<MasterNode | null>(null);
   const [terminalLogs] = useState<string[]>([
     '[07:15:02] Mesh Gateway: Connected to 5 master control hubs across Quezon & Aurora.',
-    '[07:18:44] NODE-001 (Sector Alpha): Piezoelectric calibration OK. 6 transducers online.',
+    '[07:18:44] NODE-001 (Sector Alpha): Piezoelectric calibration OK. 4 transducers online.',
     '[07:19:12] NODE-004 (Sector Delta ASCOT): Solar battery charging at 99.2% (14.2V).',
     '[07:20:00] NODE-003 (Sector Charlie): Heartbeat timed out. Switching to local buffer mode.',
   ]);
@@ -40,7 +53,7 @@ export const MasterNodesView: React.FC<MasterNodesViewProps> = ({ nodes }) => {
             Master Node Mesh Network &amp; Control Hubs
           </h1>
           <p className="text-xs text-[#808080] mt-1 font-light">
-            LoRaWAN &amp; Cellular mesh hubs aggregating 6 piezoelectric acoustic sensors each with solar battery storage.
+            LoRaWAN &amp; Cellular mesh hubs aggregating 4 piezoelectric acoustic sensors each (A0-A3) with solar battery storage.
           </p>
         </div>
 
@@ -109,26 +122,32 @@ export const MasterNodesView: React.FC<MasterNodesViewProps> = ({ nodes }) => {
                 </div>
               </div>
 
-              {/* 6 Connected Piezo Transducers Matrix */}
+              {/* 4 Connected Piezo Transducers Matrix (A0-A3) */}
               <div className="mt-4 pt-3 border-t border-[#262626]">
                 <div className="flex items-center justify-between text-[11px] font-bold text-[#808080] mb-2">
-                  <span>Piezo Transducers (6)</span>
+                  <span>Piezo Transducers (4)</span>
                   <span className="font-mono text-[#D4AF37]">{node.workingSensors} / {node.totalSensors} Active</span>
                 </div>
-                <div className="grid grid-cols-6 gap-1.5">
-                  {node.sensors.map((sensor, i) => {
+                <div className="grid grid-cols-4 gap-1.5">
+                  {node.sensors.map((sensor) => {
                     const isDamaged = sensor.status === 'DAMAGED';
+                    const isNotConnected = sensor.status === 'NOT_CONNECTED';
+                    const isDisabled = isDamaged || isNotConnected;
                     return (
                       <div
                         key={sensor.id}
                         className={`h-7 rounded border flex items-center justify-center font-mono text-[9px] font-bold transition-all ${
                           isDamaged
                             ? 'bg-[#2B1B1B] border-[#F44336]/40 text-[#F44336]'
+                            : isNotConnected
+                            ? 'bg-[#151515] border-[#333333] text-[#666666]'
                             : 'bg-[#0A0A0A] border-[#262626] text-[#D4AF37]'
                         }`}
-                        title={`${sensor.id} - Tree ${sensor.treeId} (${sensor.status})`}
+                        title={`${sensor.id} (${pinOf(sensor.id)}) - Tree ${sensor.treeId} · ${
+                          isDisabled ? (isNotConnected ? 'Not Connected' : 'Damaged') : sensor.status
+                        }`}
                       >
-                        P{i + 1}
+                        {pinOf(sensor.id)}
                       </div>
                     );
                   })}
@@ -256,20 +275,31 @@ export const MasterNodesView: React.FC<MasterNodesViewProps> = ({ nodes }) => {
                 <div className="space-y-1.5">
                   {viewedNode.sensors.map((sensor) => {
                     const isDamaged = sensor.status === 'DAMAGED';
+                    const isNotConnected = sensor.status === 'NOT_CONNECTED';
+                    const isDisabled = isDamaged || isNotConnected;
                     return (
                       <div
                         key={sensor.id}
                         className={`flex items-center justify-between px-3 py-2 rounded border text-xs font-mono ${
                           isDamaged
                             ? 'bg-[#2B1B1B] border-[#F44336]/30 text-[#F44336]'
+                            : isNotConnected
+                            ? 'bg-[#141414] border-[#333333] text-[#666666]'
                             : 'bg-[#0A0A0A] border-[#262626] text-[#E0E0E0]'
                         }`}
                       >
                         <span className="flex items-center gap-2">
-                          {isDamaged ? <AlertTriangle className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5 text-[#4CAF50]" />}
-                          {sensor.id} <span className="text-[#808080]">· Tree {sensor.treeId}</span>
+                          {isDamaged ? (
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          ) : isNotConnected ? (
+                            <X className="w-3.5 h-3.5" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#4CAF50]" />
+                          )}
+                          {piezoLabel(sensor.id)}
+                          {!isDisabled && <span className="text-[#808080]">· Tree {sensor.treeId}</span>}
                         </span>
-                        <span>{sensor.status} · {sensor.voltageMv}mV</span>
+                        <span>{isNotConnected ? 'Not Connected' : `${sensor.status} · ${sensor.voltageMv}mV`}</span>
                       </div>
                     );
                   })}

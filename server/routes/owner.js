@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { toCamel, severityForGrams, validateAvatarDataUrl } from '../utils.js';
+import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, piezoLabel } from '../utils.js';
 import {
   verifyPassword,
   hashPassword,
@@ -392,14 +392,14 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   );
 
   // One panel per PIEZO TRANSDUCER, not per master node -- every master
-  // node always carries exactly 6 piezo_sensors (S1-S6, see
-  // provisionMasterNodes in routes/api.js), and each one detects/
-  // reports its own vibration readings independently. So an owner with
-  // 1 node gets 6 panels, an owner with 2 nodes gets 12, etc. A
-  // transducer whose hardware status is 'DAMAGED' (not working / not
-  // currently in use) is still shown for visibility, but comes back
-  // with enabled: false so the UI can gray it out and skip polling it
-  // for new readings.
+  // node always carries exactly 4 piezo_sensors, one per analog input
+  // (A0-A3, "Piezo 1"-"Piezo 4" -- see PIEZO_PINS in utils.js), and
+  // each one detects/reports its own vibration readings independently.
+  // So an owner with 1 node gets 4 panels, an owner with 2 nodes gets
+  // 8, etc. A transducer that's DAMAGED or has no piezo physically
+  // wired to that pin (NOT_CONNECTED) is still shown for visibility,
+  // but comes back with enabled: false so the UI can gray it out and
+  // skip polling it for new readings.
   const sensorsStmt = db.prepare(
     `SELECT id, status FROM piezo_sensors WHERE node_id = ? ORDER BY id`
   );
@@ -414,15 +414,20 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   for (const node of nodes) {
     let sensors = toCamel(await sensorsStmt.all(node.id));
     // Defensive fallback: a node created before piezo_sensors existed
-    // (or seeded directly) may not have its 6 transducer rows yet --
-    // still render 6 slots so the panel count/layout stays consistent
-    // instead of silently collapsing to zero panels for that node.
+    // (or seeded directly) may not have its 4 transducer rows yet --
+    // still render 4 slots, matching the real A0-A3 wiring (A3 unwired
+    // by default), so the panel count/layout stays consistent instead
+    // of silently collapsing to zero panels for that node.
     if (sensors.length === 0) {
-      sensors = Array.from({ length: 6 }, (_, i) => ({ id: `${node.id}-S${i + 1}`, status: 'OPTIMAL' }));
+      sensors = PIEZO_PINS.map((pin) => ({
+        id: piezoSensorId(node.id, pin),
+        status: pin === 'A3' ? 'NOT_CONNECTED' : 'OPTIMAL',
+      }));
     }
 
-    for (const [i, sensor] of sensors.entries()) {
-      const enabled = sensor.status !== 'DAMAGED';
+    for (const sensor of sensors) {
+      const pin = sensor.id.split('-').pop(); // e.g. "MN-COCO-0001-001-A2" -> "A2"
+      const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
       const rows = enabled ? toCamel(await recentStmt.all(sensor.id, limit)) : [];
       const sparkline = enabled ? toCamel(await sparklineStmt.all(sensor.id)).reverse() : [];
       const latest = rows[0] ?? null;
@@ -431,7 +436,8 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
         piezoId: sensor.id,
         nodeId: node.id,
         nodeName: node.name,
-        sensorLabel: `${node.name} · P${i + 1}`,
+        pin,
+        sensorLabel: `${node.name} · ${piezoLabel(pin)}`,
         sensorStatus: sensor.status,
         enabled,
         status: {
@@ -446,15 +452,16 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   }
 
   // Combined "Recent Logs" list across every ENABLED piezo only -- a
-  // disabled/damaged transducer isn't reporting real readings, so it
-  // shouldn't show up mixed into the owner's live log feed.
+  // disabled/damaged/not-connected transducer isn't reporting real
+  // readings, so it shouldn't show up mixed into the owner's live log
+  // feed.
   const combinedLogs = toCamel(
     await db
       .prepare(
         `SELECT v.* FROM vibration_events v
          LEFT JOIN master_nodes n ON v.node_id = n.id
          LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
-         WHERE n.owner_id = ? AND (p.status IS NULL OR p.status != 'DAMAGED')
+         WHERE n.owner_id = ? AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
          ORDER BY ${orderBy} LIMIT ?`
       )
       .all(ownerId, limit)
@@ -474,8 +481,9 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     },
     sparkline: panels.find((p) => p.enabled)?.sparkline ?? [],
     logs: combinedLogs,
-    // New: one entry per piezo transducer (always 6 per master node)
-    // the owner has provisioned, each independently enabled/disabled.
+    // New: one entry per piezo transducer (always 4 per master node,
+    // A0-A3) the owner has provisioned, each independently
+    // enabled/disabled.
     panels,
   });
 });

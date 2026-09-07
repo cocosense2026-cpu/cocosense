@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { toCamel } from '../utils.js';
+import { toCamel, PIEZO_PINS, piezoSensorId } from '../utils.js';
 import {
   hashDefaultPassword,
   generateConfirmToken,
@@ -13,15 +13,21 @@ const router = Router();
 
 const OWNER_PORTAL_URL = process.env.OWNER_PORTAL_URL || 'http://localhost:3000';
 
-// Creates `count` master_nodes (+ 6 piezo_sensors each, matching the
-// hardware allocation shown in the Add Owner / Expand Nodes forms) for
-// an owner, continuing the numbering from however many nodes they
-// already have. Shared by owner creation and node expansion so both
-// paths provision hardware identically -- previously only expansion
-// actually created rows here, which meant a brand-new owner's chosen
-// "Initial Master Nodes" count was collected by the form but silently
-// dropped, leaving the new owner with zero nodes until an admin used
-// Expand Nodes at least once.
+// Creates `count` master_nodes (+ 4 piezo_sensors each, one per analog
+// input the board actually has -- A0-A3) for an owner, continuing the
+// numbering from however many nodes they already have. Shared by owner
+// creation and node expansion so both paths provision hardware
+// identically -- previously only expansion actually created rows here,
+// which meant a brand-new owner's chosen "Initial Master Nodes" count
+// was collected by the form but silently dropped, leaving the new
+// owner with zero nodes until an admin used Expand Nodes at least once.
+//
+// Sensor <-> pin mapping is fixed: A0 is "Piezo 1", A1 is "Piezo 2",
+// A2 is "Piezo 3", A3 is "Piezo 4". Out of the box only A0-A2 have a
+// transducer physically wired in -- A3 has no piezo connected yet, so
+// it's provisioned as NOT_CONNECTED (shown disabled/grayed out
+// everywhere sensors are listed) until someone wires one up and an
+// admin flips it to OPTIMAL from the diagnostics screen.
 async function provisionMasterNodes(ownerId, sector, count) {
   const existingCount = (await db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(ownerId)).n;
 
@@ -31,13 +37,14 @@ async function provisionMasterNodes(ownerId, sector, count) {
     await db.prepare(
       `INSERT INTO master_nodes
         (id, name, sector, owner_id, online, battery_percent, signal_rssi, total_sensors, working_sensors, damaged_sensors, last_ping, firmware_version)
-       VALUES (?,?,?,?,1,100,?,6,6,0,datetime('now'),'v2.4.8-STABLE')`
+       VALUES (?,?,?,?,1,100,?,4,3,0,datetime('now'),'v2.4.8-STABLE')`
     ).run(nodeId, `Master Node ${nodeNumber}`, sector ?? null, ownerId, '-58 dBm (Strong)');
 
-    for (let s = 1; s <= 6; s++) {
+    for (const pin of PIEZO_PINS) {
+      const status = pin === 'A3' ? 'NOT_CONNECTED' : 'OPTIMAL';
       await db.prepare(
         `INSERT INTO piezo_sensors (id, node_id, status, frequency_hz, voltage_mv) VALUES (?,?,?,?,?)`
-      ).run(`${nodeId}-S${s}`, nodeId, 'OPTIMAL', 0, 3300);
+      ).run(piezoSensorId(nodeId, pin), nodeId, status, 0, status === 'NOT_CONNECTED' ? 0 : 3300);
     }
   }
 }
@@ -359,8 +366,8 @@ router.delete('/owners/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Provisions N new Master Nodes (+6 piezo sensors each, matching the
-// admin console's "+N Master Nodes (+6N Sensors)" messaging) for an
+// Provisions N new Master Nodes (+4 piezo sensors each, matching the
+// admin console's "+N Master Nodes (+4N Sensors)" messaging) for an
 // existing owner. nodesCount/treesCount on the owner are DERIVED
 // (COUNT(*) against these tables -- see GET /owners above), so this is
 // the only way those numbers actually change; there's no counter

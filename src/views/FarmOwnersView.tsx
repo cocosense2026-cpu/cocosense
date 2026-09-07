@@ -449,7 +449,7 @@ export const FarmOwnersView: React.FC<FarmOwnersViewProps> = ({
                 <div>
                   <div className="text-[10px] text-[#808080] uppercase font-sans">Hubs</div>
                   <div className="font-bold text-[#D4AF37] text-sm">{owner.nodesCount}</div>
-                  <div className="text-[9px] text-[#808080]">{owner.nodesCount * 6} sens.</div>
+                  <div className="text-[9px] text-[#808080]">{owner.nodesCount * 4} sens.</div>
                 </div>
 
                 <div>
@@ -540,7 +540,7 @@ export const FarmOwnersView: React.FC<FarmOwnersViewProps> = ({
                       <span>{owner.nodesCount} Hubs</span>
                     </div>
                     <div className="text-[10px] text-[#808080] font-normal">
-                      {owner.nodesCount * 6} Sensors
+                      {owner.nodesCount * 4} Sensors
                     </div>
                   </td>
 
@@ -799,7 +799,7 @@ export const FarmOwnersView: React.FC<FarmOwnersViewProps> = ({
               {/* Hardware Allocation */}
               <div className="grid grid-cols-1 gap-3">
                 <div>
-                  <label className="block font-bold uppercase text-[#808080] text-[10px] tracking-wider mb-1">Initial Master Nodes ({nodesCount * 6} Sensors)</label>
+                  <label className="block font-bold uppercase text-[#808080] text-[10px] tracking-wider mb-1">Initial Master Nodes ({nodesCount * 4} Sensors)</label>
                   <input
                     type="number"
                     min="1"
@@ -885,11 +885,11 @@ export const FarmOwnersView: React.FC<FarmOwnersViewProps> = ({
               <div className="p-4 rounded bg-[#0A0A0A] border border-[#262626] font-mono space-y-1.5 text-xs">
                 <div className="flex justify-between">
                   <span className="text-[#808080]">Current Allocation:</span>
-                  <span className="text-white font-bold">{selectedOwnerForExpansion.nodesCount} Nodes ({selectedOwnerForExpansion.nodesCount * 6} Sensors)</span>
+                  <span className="text-white font-bold">{selectedOwnerForExpansion.nodesCount} Nodes ({selectedOwnerForExpansion.nodesCount * 4} Sensors)</span>
                 </div>
                 <div className="flex justify-between text-[#D4AF37]">
                   <span>Additional Sensors:</span>
-                  <span className="font-bold">+{expandCount * 6} Piezo Transducers</span>
+                  <span className="font-bold">+{expandCount * 4} Piezo Transducers</span>
                 </div>
                 <div className="pt-2 border-t border-[#262626] flex justify-between font-bold text-white text-sm">
                   <span>New Total:</span>

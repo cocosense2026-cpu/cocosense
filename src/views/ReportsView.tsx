@@ -20,7 +20,7 @@ Institution: Aurora State College of Technology (ASCOT) & PCA Quezon
 1. EXECUTIVE SUMMARY:
 - Total Monitored Palms: 12,450
 - Active Master Nodes: 5 (98.4% Uptime)
-- Piezoelectric Acoustic Transducers: 30
+- Piezoelectric Acoustic Transducers: 20 (4 per Master Node: A0-A3)
 - Confirmed Pest Infestations: 1 (Tree TR-1048, Sector Alpha, 88% Threat)
 - Early Detection Lead Time: 19.4 Days average prior to visual frond damage
 
