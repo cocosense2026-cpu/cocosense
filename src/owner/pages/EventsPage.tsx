@@ -9,9 +9,18 @@ import { usePolling } from '../../hooks/usePolling';
 interface EventRow {
   id: string | number;
   sector: string;
+  nodeId?: string;
   grams: number;
   severity: string;
   timestamp: string;
+}
+
+interface EventPanel {
+  nodeId: string;
+  nodeName: string;
+  status: { grams: number; severity: string; sector: string };
+  sparkline: EventRow[];
+  logs: EventRow[];
 }
 
 interface EventsData {
@@ -19,6 +28,7 @@ interface EventsData {
   status: { grams: number; severity: string; sector: string };
   sparkline: EventRow[];
   logs: EventRow[];
+  panels: EventPanel[];
 }
 
 const SEVERITY_STYLES: Record<string, { text: string; bg: string; border: string; icon: React.ComponentType<any> }> = {
@@ -67,7 +77,14 @@ export const EventsPage: React.FC = () => {
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
   const StatusIcon = style.icon;
-  const maxGrams = Math.max(1, ...(data?.sparkline.map((s) => s.grams) ?? [1]));
+  // How many piezo units this owner actually has -- one panel per
+  // master node the admin provisioned for them (see "Initial Master
+  // Nodes" on the Add Owner form / "Expand Nodes"). Falls back to a
+  // single empty panel so the page still renders its normal skeleton
+  // shape while the first load is in flight.
+  const panels: EventPanel[] = data?.panels?.length
+    ? data.panels
+    : [{ nodeId: '-', nodeName: 'Sensor 1', status: { grams: 0, severity: 'Normal', sector: '' }, sparkline: [], logs: [] }];
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -93,34 +110,52 @@ export const EventsPage: React.FC = () => {
         <p className="text-xs text-[#808080] mt-1">Latest reading from {data?.status.sector ?? 'your estate'}.</p>
       </div>
 
-      {/* Sparkline */}
-      <div className="rounded-lg bg-[#141414] border border-[#262626] p-5 sm:p-6">
-        <div className="flex items-center justify-between mb-4">
-          <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">Vibration Intensity</span>
-          <span className="px-2 py-0.5 rounded bg-[#1A1A1A] border border-[#333333] text-[#808080] text-[10px]">
-            Recent Readings
-          </span>
-        </div>
-        {loading ? (
-          <div className="h-16 rounded bg-[#0E0E0E] border border-[#262626] animate-pulse" />
-        ) : (
-          <div className="flex items-end gap-1.5 h-16">
-            {(data?.sparkline.length ? data.sparkline : Array(8).fill({ grams: 0, severity: 'Normal' })).map(
-              (pt: EventRow, i: number) => {
-                const h = Math.max(6, Math.round((pt.grams / maxGrams) * 64));
-                const tone = SEVERITY_STYLES[pt.severity] || SEVERITY_STYLES.Normal;
-                return (
-                  <div
-                    key={i}
-                    className={`flex-1 rounded-t ${tone.bg} border-t-2`}
-                    style={{ height: h, borderColor: tone.text.replace('text-[', '').replace(']', '') }}
-                    title={`${pt.sector ?? ''} · ${pt.grams}g`}
-                  />
-                );
-              }
-            )}
+      {/* Vibration intensity -- one card per piezo/master node the owner has */}
+      <div className="space-y-4">
+        {panels.length > 1 && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">
+              Vibration Intensity ({panels.length} sensors)
+            </span>
           </div>
         )}
+        <div className={`grid grid-cols-1 ${panels.length > 1 ? 'lg:grid-cols-2' : ''} gap-4`}>
+          {panels.map((panel) => {
+            const panelMaxGrams = Math.max(1, ...panel.sparkline.map((s) => s.grams), 1);
+            const panelBars = panel.sparkline.length ? panel.sparkline : Array(8).fill({ grams: 0, severity: 'Normal' });
+            const panelStyle = SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
+            return (
+              <div key={panel.nodeId} className="rounded-lg bg-[#141414] border border-[#262626] p-5 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">
+                    {panels.length > 1 ? panel.nodeName : 'Vibration Intensity'}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded bg-[#1A1A1A] border text-[10px] font-semibold ${panelStyle.text} ${panelStyle.border}`}>
+                    {panel.status.grams.toFixed(1)}g · {panel.status.severity}
+                  </span>
+                </div>
+                {loading ? (
+                  <div className="h-16 rounded bg-[#0E0E0E] border border-[#262626] animate-pulse" />
+                ) : (
+                  <div className="flex items-end gap-1.5 h-16">
+                    {panelBars.map((pt: EventRow, i: number) => {
+                      const h = Math.max(6, Math.round((pt.grams / panelMaxGrams) * 64));
+                      const tone = SEVERITY_STYLES[pt.severity] || SEVERITY_STYLES.Normal;
+                      return (
+                        <div
+                          key={i}
+                          className={`flex-1 rounded-t ${tone.bg} border-t-2`}
+                          style={{ height: h, borderColor: tone.text.replace('text-[', '').replace(']', '') }}
+                          title={`${pt.sector ?? ''} · ${pt.grams}g`}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Log list */}
@@ -170,7 +205,14 @@ export const EventsPage: React.FC = () => {
                     <Icon className="w-3.5 h-3.5" />
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-white truncate">{log.sector}</div>
+                    <div className="text-sm font-semibold text-white truncate">
+                      {log.sector}
+                      {panels.length > 1 && log.nodeId && (
+                        <span className="ml-1.5 text-[#808080] font-normal">
+                          · {panels.find((p) => p.nodeId === log.nodeId)?.nodeName ?? log.nodeId}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-[#808080]">{relativeTime(log.timestamp)}</div>
                   </div>
                   <div className="text-right flex-shrink-0">

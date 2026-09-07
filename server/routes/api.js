@@ -13,6 +13,35 @@ const router = Router();
 
 const OWNER_PORTAL_URL = process.env.OWNER_PORTAL_URL || 'http://localhost:3000';
 
+// Creates `count` master_nodes (+ 6 piezo_sensors each, matching the
+// hardware allocation shown in the Add Owner / Expand Nodes forms) for
+// an owner, continuing the numbering from however many nodes they
+// already have. Shared by owner creation and node expansion so both
+// paths provision hardware identically -- previously only expansion
+// actually created rows here, which meant a brand-new owner's chosen
+// "Initial Master Nodes" count was collected by the form but silently
+// dropped, leaving the new owner with zero nodes until an admin used
+// Expand Nodes at least once.
+async function provisionMasterNodes(ownerId, sector, count) {
+  const existingCount = (await db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(ownerId)).n;
+
+  for (let i = 0; i < count; i++) {
+    const nodeNumber = existingCount + i + 1;
+    const nodeId = `MN-${ownerId}-${String(nodeNumber).padStart(3, '0')}`;
+    await db.prepare(
+      `INSERT INTO master_nodes
+        (id, name, sector, owner_id, online, battery_percent, signal_rssi, total_sensors, working_sensors, damaged_sensors, last_ping, firmware_version)
+       VALUES (?,?,?,?,1,100,?,6,6,0,datetime('now'),'v2.4.8-STABLE')`
+    ).run(nodeId, `Master Node ${nodeNumber}`, sector ?? null, ownerId, '-58 dBm (Strong)');
+
+    for (let s = 1; s <= 6; s++) {
+      await db.prepare(
+        `INSERT INTO piezo_sensors (id, node_id, status, frequency_hz, voltage_mv) VALUES (?,?,?,?,?)`
+      ).run(`${nodeId}-S${s}`, nodeId, 'OPTIMAL', 0, 3300);
+    }
+  }
+}
+
 // Plain-text version -- always sent alongside the HTML version below so
 // clients that can't render HTML (and the Outbox admin log, which only
 // ever stores this) still get the full message.
@@ -222,6 +251,13 @@ router.post('/owners', async (req, res) => {
     throw err;
   }
 
+  // Provision the hardware the admin selected in "Initial Master Nodes"
+  // on the Add Owner form -- this is what makes that many devices (and
+  // this many Vibration Intensity panels, in the Owner Portal) actually
+  // exist for the owner from day one, instead of only after the first
+  // Expand Nodes action.
+  await provisionMasterNodes(b.id, b.sector ?? null, Math.max(1, Math.min(20, Number(b.nodesCount) || 1)));
+
   const { deliveryStatus, deliveryError } = await sendMail({
     toName: b.name,
     toEmail: b.email,
@@ -334,28 +370,10 @@ router.post('/owners/:id/expand-nodes', async (req, res) => {
   if (!owner) return res.status(404).json({ ok: false, error: 'Owner not found.' });
 
   const additionalNodes = Math.max(1, Math.min(20, Number(req.body?.additionalNodes) || 1));
-  const existingCount = (await db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(owner.id)).n;
 
-  const tx = async () => {
-    for (let i = 0; i < additionalNodes; i++) {
-      const nodeNumber = existingCount + i + 1;
-      const nodeId = `MN-${owner.id}-${String(nodeNumber).padStart(3, '0')}`;
-      await db.prepare(
-        `INSERT INTO master_nodes
-          (id, name, sector, owner_id, online, battery_percent, signal_rssi, total_sensors, working_sensors, damaged_sensors, last_ping, firmware_version)
-         VALUES (?,?,?,?,1,100,?,6,6,0,datetime('now'),'v2.4.8-STABLE')`
-      ).run(nodeId, `Master Node ${nodeNumber}`, owner.sector, owner.id, '-58 dBm (Strong)');
-
-      for (let s = 1; s <= 6; s++) {
-        await db.prepare(
-          `INSERT INTO piezo_sensors (id, node_id, status, frequency_hz, voltage_mv) VALUES (?,?,?,?,?)`
-        ).run(`${nodeId}-S${s}`, nodeId, 'OPTIMAL', 0, 3300);
-      }
-    }
-  };
   await db.exec('BEGIN');
   try {
-    await tx();
+    await provisionMasterNodes(owner.id, owner.sector, additionalNodes);
     await db.exec('COMMIT');
   } catch (err) {
     await db.exec('ROLLBACK');

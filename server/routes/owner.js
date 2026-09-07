@@ -387,7 +387,45 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 10, 100);
   const orderBy = sort === 'strongest' ? 'v.grams DESC' : 'v.timestamp DESC';
 
-  const rows = toCamel(
+  // One panel per master node the owner actually has -- this is what
+  // makes the number of "Vibration Intensity" cards on the Vibration
+  // Events page match how many piezo units (master nodes) the admin
+  // provisioned for this owner, whether that's 1 or 20, instead of a
+  // single hardcoded aggregate across all of them.
+  const nodes = toCamel(
+    await db.prepare(`SELECT id, name FROM master_nodes WHERE owner_id = ? ORDER BY id`).all(ownerId)
+  );
+
+  const recentStmt = db.prepare(
+    `SELECT v.* FROM vibration_events v WHERE v.node_id = ? ORDER BY ${orderBy} LIMIT ?`
+  );
+  const sparklineStmt = db.prepare(
+    `SELECT v.* FROM vibration_events v WHERE v.node_id = ? ORDER BY v.timestamp DESC LIMIT 8`
+  );
+
+  const panels = [];
+  for (const node of nodes) {
+    const rows = toCamel(await recentStmt.all(node.id, limit));
+    const sparkline = toCamel(await sparklineStmt.all(node.id)).reverse();
+    const latest = rows[0] ?? null;
+
+    panels.push({
+      nodeId: node.id,
+      nodeName: node.name,
+      status: {
+        grams: latest?.grams ?? 0,
+        severity: latest ? severityForGrams(latest.grams) : 'Normal',
+        sector: latest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
+      },
+      sparkline,
+      logs: rows,
+    });
+  }
+
+  // Combined "Recent Logs" list across every node, same behavior as
+  // before -- each row already carries node_id so the UI can label
+  // which piezo it came from now that there can be more than one.
+  const combinedLogs = toCamel(
     await db
       .prepare(
         `SELECT v.* FROM vibration_events v
@@ -397,28 +435,23 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
       )
       .all(ownerId, limit)
   );
+  const combinedLatest = combinedLogs[0] ?? null;
 
-  const sparkline = toCamel(
-    await db
-      .prepare(
-        `SELECT v.* FROM vibration_events v
-         LEFT JOIN master_nodes n ON v.node_id = n.id
-         WHERE n.owner_id = ?
-         ORDER BY v.timestamp DESC LIMIT 8`
-      )
-      .all(ownerId)
-  ).reverse();
-
-  const latest = rows[0] ?? null;
   res.json({
     sort,
+    // Kept for any older client still reading the top-level shape --
+    // mirrors the single strongest/most-recent reading across ALL of
+    // the owner's nodes, same as this endpoint returned before panels
+    // existed.
     status: {
-      grams: latest?.grams ?? 0,
-      severity: latest ? severityForGrams(latest.grams) : 'Normal',
-      sector: latest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
+      grams: combinedLatest?.grams ?? 0,
+      severity: combinedLatest ? severityForGrams(combinedLatest.grams) : 'Normal',
+      sector: combinedLatest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
     },
-    sparkline,
-    logs: rows,
+    sparkline: panels[0]?.sparkline ?? [],
+    logs: combinedLogs,
+    // New: one entry per piezo/master node the owner has provisioned.
+    panels,
   });
 });
 
