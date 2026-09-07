@@ -101,6 +101,7 @@ export interface VibrationEvent {
   sector: string;
   treeId: string;
   nodeId?: string;
+  piezoSensorId?: string;
   grams: number;
   frequencyHz: number;
   severity: 'Critical' | 'Warning' | 'Normal' | string;

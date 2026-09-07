@@ -118,6 +118,7 @@ const migrations = [
   `ALTER TABLE farm_owners ADD COLUMN avatar_url TEXT`,
   `ALTER TABLE admins ADD COLUMN avatar_url TEXT`,
   `ALTER TABLE superadmins ADD COLUMN avatar_url TEXT`,
+  `ALTER TABLE vibration_events ADD COLUMN piezo_sensor_id TEXT`,
 ];
 for (const sql of migrations) {
   try { await db.exec(sql); } catch { /* column already exists -- fine */ }

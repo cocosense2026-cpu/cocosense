@@ -48,6 +48,7 @@ router.post('/ingest-vibration', async (req, res) => {
   const {
     api_key,
     node_id,
+    piezo_id,
     sector,
     grams,
     battery,
@@ -71,14 +72,24 @@ router.post('/ingest-vibration', async (req, res) => {
   const severity = severityForGrams(grams);
   const pestLikely = !!pest_likely;
 
+  // Every master node always has exactly 6 piezo transducers (S1-S6,
+  // provisioned in provisionMasterNodes). Real firmware that's only
+  // wired to one physical sensor may not send `piezo_id` at all -- in
+  // that case, attribute the reading to that node's first transducer
+  // (`{node_id}-S1`) so it still lands on a specific Vibration Events
+  // panel instead of being orphaned, while multi-sensor firmware can
+  // report each transducer separately by passing its real piezo_id.
+  const piezoSensorId = piezo_id || `${node_id}-S1`;
+
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
   await db.prepare(
-    `INSERT INTO vibration_events (sector, node_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sector ?? null,
     node_id,
+    piezoSensorId,
     grams,
     severity,
     pestLikely ? 1 : 0,
@@ -115,7 +126,7 @@ router.post('/ingest-vibration', async (req, res) => {
       sector ?? null,
       node_id,
       severity.toUpperCase(),
-      `Piezo sensor on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
+      `Piezo sensor ${piezoSensorId} on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
       grams
     );
   }
@@ -133,7 +144,7 @@ router.post('/ingest-vibration', async (req, res) => {
       'Pest Feeding Pattern Detected',
       sector ?? null,
       node_id,
-      `Piezo sensor on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+      `Piezo sensor ${piezoSensorId} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
         (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
         (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : ''),
       grams

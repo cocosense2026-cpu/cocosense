@@ -387,50 +387,74 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 10, 100);
   const orderBy = sort === 'strongest' ? 'v.grams DESC' : 'v.timestamp DESC';
 
-  // One panel per master node the owner actually has -- this is what
-  // makes the number of "Vibration Intensity" cards on the Vibration
-  // Events page match how many piezo units (master nodes) the admin
-  // provisioned for this owner, whether that's 1 or 20, instead of a
-  // single hardcoded aggregate across all of them.
   const nodes = toCamel(
     await db.prepare(`SELECT id, name FROM master_nodes WHERE owner_id = ? ORDER BY id`).all(ownerId)
   );
 
+  // One panel per PIEZO TRANSDUCER, not per master node -- every master
+  // node always carries exactly 6 piezo_sensors (S1-S6, see
+  // provisionMasterNodes in routes/api.js), and each one detects/
+  // reports its own vibration readings independently. So an owner with
+  // 1 node gets 6 panels, an owner with 2 nodes gets 12, etc. A
+  // transducer whose hardware status is 'DAMAGED' (not working / not
+  // currently in use) is still shown for visibility, but comes back
+  // with enabled: false so the UI can gray it out and skip polling it
+  // for new readings.
+  const sensorsStmt = db.prepare(
+    `SELECT id, status FROM piezo_sensors WHERE node_id = ? ORDER BY id`
+  );
   const recentStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.node_id = ? ORDER BY ${orderBy} LIMIT ?`
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY ${orderBy} LIMIT ?`
   );
   const sparklineStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.node_id = ? ORDER BY v.timestamp DESC LIMIT 8`
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY v.timestamp DESC LIMIT 8`
   );
 
   const panels = [];
   for (const node of nodes) {
-    const rows = toCamel(await recentStmt.all(node.id, limit));
-    const sparkline = toCamel(await sparklineStmt.all(node.id)).reverse();
-    const latest = rows[0] ?? null;
+    let sensors = toCamel(await sensorsStmt.all(node.id));
+    // Defensive fallback: a node created before piezo_sensors existed
+    // (or seeded directly) may not have its 6 transducer rows yet --
+    // still render 6 slots so the panel count/layout stays consistent
+    // instead of silently collapsing to zero panels for that node.
+    if (sensors.length === 0) {
+      sensors = Array.from({ length: 6 }, (_, i) => ({ id: `${node.id}-S${i + 1}`, status: 'OPTIMAL' }));
+    }
 
-    panels.push({
-      nodeId: node.id,
-      nodeName: node.name,
-      status: {
-        grams: latest?.grams ?? 0,
-        severity: latest ? severityForGrams(latest.grams) : 'Normal',
-        sector: latest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
-      },
-      sparkline,
-      logs: rows,
-    });
+    for (const [i, sensor] of sensors.entries()) {
+      const enabled = sensor.status !== 'DAMAGED';
+      const rows = enabled ? toCamel(await recentStmt.all(sensor.id, limit)) : [];
+      const sparkline = enabled ? toCamel(await sparklineStmt.all(sensor.id)).reverse() : [];
+      const latest = rows[0] ?? null;
+
+      panels.push({
+        piezoId: sensor.id,
+        nodeId: node.id,
+        nodeName: node.name,
+        sensorLabel: `${node.name} · P${i + 1}`,
+        sensorStatus: sensor.status,
+        enabled,
+        status: {
+          grams: latest?.grams ?? 0,
+          severity: !enabled ? 'Offline' : latest ? severityForGrams(latest.grams) : 'Normal',
+          sector: latest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
+        },
+        sparkline,
+        logs: rows,
+      });
+    }
   }
 
-  // Combined "Recent Logs" list across every node, same behavior as
-  // before -- each row already carries node_id so the UI can label
-  // which piezo it came from now that there can be more than one.
+  // Combined "Recent Logs" list across every ENABLED piezo only -- a
+  // disabled/damaged transducer isn't reporting real readings, so it
+  // shouldn't show up mixed into the owner's live log feed.
   const combinedLogs = toCamel(
     await db
       .prepare(
         `SELECT v.* FROM vibration_events v
          LEFT JOIN master_nodes n ON v.node_id = n.id
-         WHERE n.owner_id = ?
+         LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
+         WHERE n.owner_id = ? AND (p.status IS NULL OR p.status != 'DAMAGED')
          ORDER BY ${orderBy} LIMIT ?`
       )
       .all(ownerId, limit)
@@ -441,16 +465,17 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     sort,
     // Kept for any older client still reading the top-level shape --
     // mirrors the single strongest/most-recent reading across ALL of
-    // the owner's nodes, same as this endpoint returned before panels
-    // existed.
+    // the owner's working piezo units, same as this endpoint returned
+    // before per-piezo panels existed.
     status: {
       grams: combinedLatest?.grams ?? 0,
       severity: combinedLatest ? severityForGrams(combinedLatest.grams) : 'Normal',
       sector: combinedLatest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
     },
-    sparkline: panels[0]?.sparkline ?? [],
+    sparkline: panels.find((p) => p.enabled)?.sparkline ?? [],
     logs: combinedLogs,
-    // New: one entry per piezo/master node the owner has provisioned.
+    // New: one entry per piezo transducer (always 6 per master node)
+    // the owner has provisioned, each independently enabled/disabled.
     panels,
   });
 });

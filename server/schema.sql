@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS vibration_events (
   sector              TEXT,
   tree_id             TEXT,
   node_id             TEXT,
+  piezo_sensor_id     TEXT,
   grams               REAL NOT NULL,
   frequency_hz        REAL,
   severity             TEXT DEFAULT 'Normal',
