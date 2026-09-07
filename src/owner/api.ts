@@ -118,6 +118,8 @@ export const ownerApi = {
 
   events: (sort: 'recent' | 'strongest') => request<any>(`/owner/events?sort=${sort}`),
 
+  piezoEvents: (piezoId: string) => request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}`),
+
   notifications: (filter: string) => request<{ notifications: any[]; activeAlertCount: number }>(
     `/owner/notifications?filter=${filter}`
   ),

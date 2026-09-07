@@ -11,6 +11,7 @@ import { OwnerShell } from './components/OwnerShell';
 import { DashboardPage } from './pages/DashboardPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { EventsPage } from './pages/EventsPage';
+import { PiezoDetailPage } from './pages/PiezoDetailPage';
 import { MasterNodesPage } from './pages/MasterNodesPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -115,6 +116,7 @@ const OwnerRoutes: React.FC = () => (
       <Route index element={<DashboardPage />} />
       <Route path="notifications" element={<NotificationsPage />} />
       <Route path="events" element={<EventsPage />} />
+      <Route path="events/piezo/:piezoId" element={<PiezoDetailPage />} />
       <Route path="nodes" element={<MasterNodesPage />} />
       <Route path="profile" element={<ProfilePage />} />
       <Route path="settings" element={<SettingsPage />} />

@@ -809,7 +809,7 @@ export const FarmOwnersView: React.FC<FarmOwnersViewProps> = ({
                     className="w-full px-3 py-2 rounded bg-[#0A0A0A] border border-[#262626] text-white focus:border-[#D4AF37] focus:outline-none"
                   />
                   <p className="mt-1 text-[10px] text-[#808080]">
-                    Each Master Node shows up as its own Vibration Intensity panel in the owner's portal.
+                    Each piezo transducer (4 per Master Node) shows up as its own "Piezo N" Vibration Intensity panel in the owner's portal.
                   </p>
                 </div>
               </div>

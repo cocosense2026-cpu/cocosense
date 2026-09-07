@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, piezoLabel } from '../utils.js';
+import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId } from '../utils.js';
 import {
   verifyPassword,
   hashPassword,
@@ -432,12 +432,21 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
       const sparkline = enabled ? toCamel(await sparklineStmt.all(sensor.id)).reverse() : [];
       const latest = rows[0] ?? null;
 
+      // Label is just "Piezo N" -- each master node always carries the
+      // same 4 pins (A0-A3), so prefixing every card with the node's
+      // name ("Master Node 1 · Piezo 1", "Master Node 1 · Piezo 2" ...)
+      // just repeated the same node name 4 times over for a
+      // single-node owner. nodeName is still returned separately so a
+      // multi-node owner's detail view can disambiguate which hub a
+      // given piezo belongs to.
+      const pieceNum = PIEZO_PINS.indexOf(pin) + 1;
       panels.push({
         piezoId: sensor.id,
         nodeId: node.id,
         nodeName: node.name,
         pin,
-        sensorLabel: `${node.name} · ${piezoLabel(pin)}`,
+        piezoNumber: pieceNum,
+        sensorLabel: `Piezo ${pieceNum > 0 ? pieceNum : '?'}`,
         sensorStatus: sensor.status,
         enabled,
         status: {
@@ -485,6 +494,71 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     // A0-A3) the owner has provisioned, each independently
     // enabled/disabled.
     panels,
+  });
+});
+
+// Single-piezo detail (owner-scoped): the page an owner lands on after
+// tapping one "Piezo N" card in /owner/events. Scoped to a piezo_sensor
+// whose parent master_node belongs to this owner -- returns 404 rather
+// than another owner's data if the id doesn't resolve under them.
+// Always caps the log list at 10 rows (the "recent log of 10" this
+// detail view is meant to show), independent of the ?limit the list
+// page uses for its own combined feed.
+router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const { piezoId } = req.params;
+  const RECENT_LIMIT = 10;
+
+  const sensor = toCamel(
+    await db
+      .prepare(
+        `SELECT p.*, n.id AS node_id, n.name AS node_name, n.sector AS node_sector
+         FROM piezo_sensors p
+         JOIN master_nodes n ON p.node_id = n.id
+         WHERE p.id = ? AND n.owner_id = ?`
+      )
+      .get(piezoId, ownerId)
+  );
+  if (!sensor) {
+    return res.status(404).json({ error: 'Piezo sensor not found for this owner.' });
+  }
+
+  const pin = sensor.id.split('-').pop();
+  const piezoNumber = PIEZO_PINS.indexOf(pin) + 1;
+  const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
+
+  const logs = enabled
+    ? toCamel(
+        await db
+          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT ?`)
+          .all(sensor.id, RECENT_LIMIT)
+      )
+    : [];
+  const sparkline = enabled
+    ? toCamel(
+        await db
+          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT 20`)
+          .all(sensor.id)
+      ).reverse()
+    : [];
+  const latest = logs[0] ?? null;
+
+  res.json({
+    piezoId: sensor.id,
+    nodeId: sensor.nodeId,
+    nodeName: sensor.nodeName,
+    pin,
+    piezoNumber,
+    sensorLabel: `Piezo ${piezoNumber > 0 ? piezoNumber : '?'}`,
+    sensorStatus: sensor.status,
+    enabled,
+    status: {
+      grams: latest?.grams ?? 0,
+      severity: !enabled ? 'Offline' : latest ? severityForGrams(latest.grams) : 'Normal',
+      sector: latest?.sector ?? sensor.nodeSector ?? req.ownerRow.sector ?? 'Your Estate',
+    },
+    sparkline,
+    logs,
   });
 });
 

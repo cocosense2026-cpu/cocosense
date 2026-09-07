@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, ChevronRight } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -106,7 +106,7 @@ export const EventsPage: React.FC = () => {
         nodeId: '-',
         nodeName: 'Sensor 1',
         pin,
-        sensorLabel: `Sensor 1 · Piezo ${i + 1} (${pin})`,
+        sensorLabel: `Piezo ${i + 1}`,
         sensorStatus: 'OPTIMAL',
         enabled: true,
         status: { grams: 0, severity: 'Normal', sector: '' },
@@ -156,15 +156,19 @@ export const EventsPage: React.FC = () => {
             const panelStyle = SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
             const notConnected = panel.sensorStatus === 'NOT_CONNECTED';
             return (
-              <div
+              <Link
                 key={panel.piezoId}
-                className={`rounded-lg border p-5 sm:p-6 transition-opacity ${
-                  panel.enabled ? 'bg-[#141414] border-[#262626]' : 'bg-[#111111] border-[#262626] opacity-60'
+                to={`/owner/events/piezo/${encodeURIComponent(panel.piezoId)}`}
+                className={`block rounded-lg border p-5 sm:p-6 transition-all ${
+                  panel.enabled
+                    ? 'bg-[#141414] border-[#262626] hover:border-[#D4AF37]/50'
+                    : 'bg-[#111111] border-[#262626] opacity-60 hover:opacity-80'
                 }`}
               >
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">
+                  <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#808080]">
                     {panel.sensorLabel}
+                    <ChevronRight className="w-3.5 h-3.5" />
                   </span>
                   <span className={`px-2 py-0.5 rounded bg-[#1A1A1A] border text-[10px] font-semibold ${panelStyle.text} ${panelStyle.border}`}>
                     {panel.enabled
@@ -197,7 +201,7 @@ export const EventsPage: React.FC = () => {
                     })}
                   </div>
                 )}
-              </div>
+              </Link>
             );
           })}
         </div>
