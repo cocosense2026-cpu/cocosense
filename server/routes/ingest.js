@@ -98,6 +98,22 @@ router.post('/ingest-vibration', async (req, res) => {
     pest_band_ratio ?? null
   );
 
+  // Cap raw readings at 10 per sensor -- once a new reading pushes a
+  // sensor's count past 10, the oldest one for that sensor is dropped so
+  // vibration_events stays a rolling window instead of growing forever.
+  // Scoped to piezo_sensor_id only -- alerts and notifications are
+  // untouched and keep accumulating normally.
+  await db.prepare(
+    `DELETE FROM vibration_events
+     WHERE piezo_sensor_id = ?
+       AND id NOT IN (
+         SELECT id FROM vibration_events
+         WHERE piezo_sensor_id = ?
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 10
+       )`
+  ).run(piezoSensorIdValue, piezoSensorIdValue);
+
   // Keep master_nodes' live health snapshot fresh if this node is already
   // registered. battery/signal are only touched when the device actually
   // sent them -- COALESCE keeps whatever was there before otherwise, so
