@@ -82,10 +82,27 @@ export const OutboxView: React.FC<OutboxViewProps> = ({
                   </td>
                   <td className="py-4 px-4 font-medium text-[#E0E0E0]">{email.subject}</td>
                   <td className="py-4 px-4">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span className="capitalize">{email.status || email.deliveryStatus || 'Sent'}</span>
-                    </span>
+                    {(() => {
+                      const ds = email.deliveryStatus;
+                      const config =
+                        ds === 'delivered'
+                          ? { label: 'Sent (250 OK)', color: '#4CAF50', Icon: CheckCircle2 }
+                          : ds === 'failed'
+                          ? { label: 'Failed', color: '#F44336', Icon: AlertCircle }
+                          : ds === 'not_sent'
+                          ? { label: 'Logged (SMTP not configured)', color: '#F0A020', Icon: Clock }
+                          : { label: email.status || 'Unknown', color: '#808080', Icon: AlertCircle };
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-[#141414] border"
+                          style={{ color: config.color, borderColor: `${config.color}4D` }}
+                          title={email.deliveryError || undefined}
+                        >
+                          <config.Icon className="w-3.5 h-3.5" />
+                          <span>{config.label}</span>
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-4 px-4 font-mono text-[11px] text-[#808080]">{email.sentAt || email.createdAt}</td>
                   <td className="py-4 px-5 text-right">
@@ -193,6 +210,11 @@ export const OutboxView: React.FC<OutboxViewProps> = ({
             <div className="text-xs space-y-2">
               <p className="text-[#808080]">To: <strong className="text-white">{selectedEmail.to || selectedEmail.toEmail}</strong></p>
               <p className="text-[#808080]">Dispatched: <strong className="text-white">{selectedEmail.sentAt || selectedEmail.createdAt}</strong></p>
+              {selectedEmail.deliveryError && (
+                <p className="text-[#F44336]">
+                  Delivery error: <span className="font-mono">{selectedEmail.deliveryError}</span>
+                </p>
+              )}
               <pre className="p-4 rounded bg-[#0A0A0A] border border-[#262626] text-[#E0E0E0] whitespace-pre-wrap font-sans text-xs leading-relaxed">
                 {selectedEmail.body}
               </pre>
