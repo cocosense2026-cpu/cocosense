@@ -25,8 +25,38 @@ const client = createClient({ url, authToken });
 
 // Only one BEGIN/COMMIT/ROLLBACK transaction can be open at a time --
 // fine for this app's traffic (infrequent admin actions, not a
-// high-concurrency API), but worth knowing if usage ever grows.
+// high-concurrency API). Two admins clicking "Delete"/"Expand Nodes"
+// at close to the same moment used to be able to race on a shared
+// `activeTx` flag: request B's BEGIN could see the flag still unset
+// (because request A's `await client.transaction('write')` hadn't
+// resolved yet) and open a second transaction, silently overwriting
+// request A's reference -- whichever request committed/rolled back
+// last would then be operating on the WRONG transaction object, and
+// if a request threw before reaching COMMIT/ROLLBACK at all, the flag
+// stayed stuck "open" forever, permanently 500-ing every future
+// transactional request until the process restarted (see the postmortem
+// for the 2026-09-08 registration outage).
+//
+// Fixed with a proper async mutex: BEGIN calls queue up and run their
+// transaction one at a time in arrival order instead of racing, and
+// the lock is released in a `finally` around COMMIT/ROLLBACK (and
+// immediately if BEGIN itself fails to open) so a failed transaction
+// can never wedge the lock open for good.
 let activeTx = null;
+let lockChain = Promise.resolve();
+let releaseLock = null;
+
+function acquireTxLock() {
+  const waitForTurn = lockChain;
+  lockChain = new Promise((resolveNextTurn) => {
+    waitForTurn.then(() => {
+      // This request now holds the lock; releaseLock() hands it to
+      // whoever is next in line.
+      releaseLock = resolveNextTurn;
+    });
+  });
+  return waitForTurn;
+}
 
 async function exec1(sql, args = []) {
   const executor = activeTx ?? client;
@@ -61,15 +91,32 @@ export const db = {
   async exec(sql) {
     const trimmed = sql.trim().toUpperCase();
     if (trimmed === 'BEGIN') {
-      if (activeTx) throw new Error('[db] a transaction is already open');
-      activeTx = await client.transaction('write');
+      await acquireTxLock();
+      try {
+        activeTx = await client.transaction('write');
+      } catch (err) {
+        // Never actually opened -- free the lock immediately instead
+        // of leaving the next request waiting on a transaction that
+        // doesn't exist.
+        activeTx = null;
+        const release = releaseLock;
+        releaseLock = null;
+        if (release) release();
+        throw err;
+      }
       return;
     }
     if (trimmed === 'COMMIT') {
       if (activeTx) {
         const tx = activeTx;
         activeTx = null;
-        await tx.commit();
+        try {
+          await tx.commit();
+        } finally {
+          const release = releaseLock;
+          releaseLock = null;
+          if (release) release();
+        }
       }
       return;
     }
@@ -77,7 +124,13 @@ export const db = {
       if (activeTx) {
         const tx = activeTx;
         activeTx = null;
-        await tx.rollback();
+        try {
+          await tx.rollback();
+        } finally {
+          const release = releaseLock;
+          releaseLock = null;
+          if (release) release();
+        }
       }
       return;
     }
