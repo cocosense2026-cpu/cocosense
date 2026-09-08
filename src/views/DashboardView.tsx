@@ -70,17 +70,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-1 rounded bg-[#1A1A1A] border border-[#333333] text-[10px] font-mono font-bold text-[#16A34A] tracking-wider uppercase flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-[#16A34A] animate-pulse"></span>
-                  ASCOT AGRO-FORESTRY &middot; QUEZON COCONUT MESH
-                </span>
                 <span className="text-[11px] text-[#808080] font-mono">Bioacoustic LoRa Mesh v2.4</span>
               </div>
               <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-white tracking-tight uppercase font-sans">
                 Plantation Telemetry &amp; Bioacoustics
               </h1>
               <p className="text-xs sm:text-sm text-[#A0A0A0] leading-relaxed font-light">
-                Continuous bioacoustic monitoring of 12,450 coconut palms. Piezoelectric acoustic sensors detect internal wood-boring vibrations (Rhinoceros Beetle &amp; Red Palm Weevil) up to 21 days before visual canopy wilting occurs.
+                Continuous bioacoustic monitoring of an estimated 12,450 coconut palms. Piezoelectric acoustic sensors detect internal wood-boring vibrations (Rhinoceros Beetle &amp; Red Palm Weevil) up to 21 days before visual canopy wilting occurs.
               </p>
             </div>
           </div>
