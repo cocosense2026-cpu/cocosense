@@ -19,6 +19,15 @@ function getTransporter() {
   transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user, pass },
+    // Without explicit timeouts, nodemailer's Gmail transport can hang
+    // for minutes if the outbound network can't reach smtp.gmail.com
+    // (common on campus Wi-Fi / hotspots / hosts that block ports
+    // 465/587) -- and any route that `await`s sendMail() would hang
+    // right along with it. 10s is generous for a real SMTP handshake
+    // but fails fast when the port is simply blocked.
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
   return transporter;
 }

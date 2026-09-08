@@ -197,15 +197,22 @@ export function App() {
 
     setOwners(prev => [createdOwner, ...prev]);
 
+    // The server now sends the confirmation email in the background
+    // (see server/routes/api.js) instead of making this request wait on
+    // SMTP, so we don't know the real delivery outcome yet -- the next
+    // poll of the Outbox (usePolling, every 10s) will pick up the real
+    // status once it lands. Show a placeholder row so the admin sees
+    // something immediately, but don't claim a delivery status we
+    // haven't actually observed.
     const newEmail: OutboxEmail = {
       id: `EM-${Date.now()}`,
       to: createdOwner.email,
       subject: 'Welcome to CocoSense — Confirm Your Account',
       body: `Mabuhay ${createdOwner.name},\n\nYour CocoSense monitoring account has been created.\n\n  Owner ID: ${createdOwner.id}\n  Login email: ${createdOwner.email}\n  Temporary password: user123\n\nA confirmation link was sent to your email -- you'll need to click it before you can sign in.`,
       sentAt: 'Just now',
-      status: result.emailDeliveryStatus === 'delivered' ? 'Sent (250 OK)' : 'Logged (SMTP not configured)',
-      deliveryStatus: result.emailDeliveryStatus,
-      deliveryError: result.emailDeliveryError,
+      status: 'Sending…',
+      deliveryStatus: undefined,
+      deliveryError: undefined,
     };
     setOutbox(prev => [newEmail, ...prev]);
 
@@ -219,11 +226,7 @@ export function App() {
     };
     setNotifications(prev => [newNotif, ...prev]);
 
-    showToast(
-      result.emailDeliveryStatus === 'delivered'
-        ? `Registered ${createdOwner.name} & emailed their confirmation link!`
-        : `Registered ${createdOwner.name}. Confirmation link logged to Outbox (configure GMAIL_USER/GMAIL_APP_PASSWORD in .env to actually send).`
-    );
+    showToast(`Registered ${createdOwner.name}. Confirmation email is sending -- check the Outbox for delivery status.`);
   };
 
   const handleDeleteOwner = async (ownerId: string) => {

@@ -265,15 +265,6 @@ router.post('/owners', async (req, res) => {
   // Expand Nodes action.
   await provisionMasterNodes(b.id, b.sector ?? null, Math.max(1, Math.min(20, Number(b.nodesCount) || 1)));
 
-  const { deliveryStatus, deliveryError } = await sendMail({
-    toName: b.name,
-    toEmail: b.email,
-    subject: 'Welcome to CocoSense — Confirm Your Account',
-    category: 'credentials',
-    body: confirmationEmailBody({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
-    html: confirmationEmailHtml({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
-  });
-
   // Owner-facing welcome notification -- shows up in their portal's
   // Notifications page the first time they sign in, separate from the
   // admin-wide notification created below.
@@ -287,7 +278,29 @@ router.post('/owners', async (req, res) => {
     b.id
   );
 
-  res.status(201).json({ ok: true, id: b.id, emailDeliveryStatus: deliveryStatus, emailDeliveryError: deliveryError });
+  // Respond to the admin as soon as the account itself exists --
+  // everything the "Register & Dispatch Email" button actually needs
+  // to stop spinning is done. The email send is fire-and-forget from
+  // here: it can still take several seconds (or fail/timeout) without
+  // ever making the Add Owner modal look "stuck". sendMail() already
+  // catches its own errors and always logs to outbox_emails, so there's
+  // nothing to await or re-throw here -- the admin can see delivery
+  // status in the Outbox view instead of blocking on it.
+  res.status(201).json({ ok: true, id: b.id, emailPending: true });
+
+  sendMail({
+    toName: b.name,
+    toEmail: b.email,
+    subject: 'Welcome to CocoSense — Confirm Your Account',
+    category: 'credentials',
+    body: confirmationEmailBody({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
+    html: confirmationEmailHtml({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
+  }).catch((err) => {
+    // Belt-and-suspenders: sendMail already swallows its own errors
+    // internally, but if something upstream of that throws (e.g. the
+    // outbox INSERT itself), don't let it become an unhandled rejection.
+    console.error('[owners] background confirmation email failed:', err);
+  });
 });
 
 // Note: owner login/change-password used to live here too, before the
