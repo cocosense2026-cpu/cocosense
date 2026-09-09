@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, validateAvatarDataUrl } from '../utils.js';
 import { verifyPassword, hashPassword, generateSessionToken, sessionExpiryIso } from '../auth.js';
+import { restampRowHash } from '../hash.js';
 
 const router = Router();
 
@@ -20,9 +21,10 @@ function publicAdmin(row) {
 }
 
 async function logActivity(superadminId, action, detail) {
-  await db.prepare(
+  const result = await db.prepare(
     `INSERT INTO superadmin_activity (superadmin_id, action, detail) VALUES (?, ?, ?)`
   ).run(superadminId, action, detail ?? null);
+  await restampRowHash(db, 'superadmin_activity', 'id', result.lastInsertRowid);
 }
 
 // ---------- Auth middleware ----------
@@ -107,6 +109,7 @@ router.patch('/superadmin/profile', requireSuperAdminAuth, async (req, res) => {
       avatarUrl,
       req.superadminRow.id
     );
+    await restampRowHash(db, 'superadmins', 'id', req.superadminRow.id);
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
       return res.status(409).json({ ok: false, error: 'That email is already in use by another account.' });
@@ -137,6 +140,7 @@ router.post('/superadmin/admins', requireSuperAdminAuth, async (req, res) => {
   await db.prepare(
     `INSERT INTO admins (id, name, email, role, status, password_hash) VALUES (?,?,?,?,?,?)`
   ).run(id, b.name, b.email, b.role || 'Administrator', 'Active', hashPassword(password));
+  await restampRowHash(db, 'admins', 'id', id);
 
   await logActivity(req.superadminRow.id, 'Created admin account', `${b.name} (${b.email})`);
 
@@ -153,6 +157,7 @@ router.patch('/superadmin/admins/:id/status', requireSuperAdminAuth, async (req,
   if (!admin) return res.status(404).json({ ok: false, error: 'Admin account not found.' });
 
   await db.prepare(`UPDATE admins SET status = ? WHERE id = ?`).run(status, admin.id);
+  await restampRowHash(db, 'admins', 'id', admin.id);
   if (status === 'Inactive') {
     await db.prepare(`DELETE FROM admin_sessions WHERE admin_id = ?`).run(admin.id);
   }

@@ -6,6 +6,7 @@ import './load-env.js'; // must stay first -- see comment in that file
 import './db.js';
 import { db } from './db.js';
 import { hashDefaultPassword, hashPassword } from './auth.js';
+import { restampRowHash } from './hash.js';
 
 // Demo admin console login -- see src/admin/. Password is intentionally
 // simple/memorable since this is a demo account, not a real deployment.
@@ -13,6 +14,7 @@ await db.prepare(
   `INSERT OR IGNORE INTO admins (id, name, email, role, password_hash)
    VALUES (?,?,?,?,?)`
 ).run('ADM-0001', 'Demo Administrator', 'admin@cocosense.ph', 'System Administrator', hashPassword('admin123'));
+await restampRowHash(db, 'admins', 'id', 'ADM-0001');
 
 // Demo Super Admin console login -- see src/superadmin/. Sits one level
 // above the admin console above (provisions/deactivates Administrator
@@ -21,6 +23,7 @@ await db.prepare(
   `INSERT OR IGNORE INTO superadmins (id, name, email, role, password_hash)
    VALUES (?,?,?,?,?)`
 ).run('SA-0001', 'Root Super Admin', 'superadmin@cocosense.ph', 'Super Administrator', hashPassword('super123'));
+await restampRowHash(db, 'superadmins', 'id', 'SA-0001');
 
 await db.prepare(
   `INSERT OR IGNORE INTO farm_owners
@@ -34,6 +37,7 @@ await db.prepare(
   'Sample St.', 'Sample St., Barangay 1, Bayombong, Nueva Vizcaya, Philippines',
   'Sector 1', '16.4833, 121.1500', '#059669', 'DO', 1, hashDefaultPassword()
 );
+await restampRowHash(db, 'farm_owners', 'id', 'COCO-0001');
 
 // Matches nodeId in the merged ESP32 sketch (const char* nodeId = "MN-N1")
 // so readings from the real device land against a node that already exists.
@@ -42,6 +46,7 @@ await db.prepare(
     (id, name, sector, owner_id, online, battery_percent, signal_rssi, firmware_version, lat, lng)
    VALUES (?,?,?,?,?,?,?,?,?,?)`
 ).run('MN-N1', 'Master Node 1', 'Sector 1', 'COCO-0001', 1, 100, '-60 dBm (Strong)', 'v1.0', 16.4833, 121.1500);
+await restampRowHash(db, 'master_nodes', 'id', 'MN-N1');
 
 await db.prepare(
   `INSERT OR IGNORE INTO monitored_trees
@@ -49,6 +54,7 @@ await db.prepare(
      vibration_frequency_hz, vibration_grams, assigned_node_id)
    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
 ).run('TR-0001', 'COCO-0001', 'Sector 1', 1, 1, 20, 30, 'No Pests', 0, 'None', 0, 0, 'MN-N1');
+await restampRowHash(db, 'monitored_trees', 'id', 'TR-0001');
 
 console.log('[seed] done.');
 

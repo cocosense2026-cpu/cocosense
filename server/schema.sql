@@ -48,7 +48,11 @@ CREATE TABLE IF NOT EXISTS farm_owners (
   -- password, so nothing readable sits in the DB) + expiry. Cleared once
   -- consumed or once a new one is requested. See server/routes/owner.js.
   reset_code_hash      TEXT,
-  reset_code_expires   TEXT
+  reset_code_expires   TEXT,
+  -- SHA-256 integrity fingerprint of this row's data fields (see
+  -- server/hash.js). Lets an admin/auditor detect a row that was
+  -- edited directly in the database instead of through the app.
+  row_hash             TEXT
 );
 
 -- One row per signed-in owner session. Deliberately NOT cookie-based --
@@ -72,7 +76,8 @@ CREATE TABLE IF NOT EXISTS owner_settings (
   notify_push           INTEGER DEFAULT 1,
   local_buzzer_alert    INTEGER DEFAULT 1,
   notify_critical_only  INTEGER DEFAULT 0,
-  theme                 TEXT DEFAULT 'Dark'
+  theme                 TEXT DEFAULT 'Dark',
+  row_hash              TEXT
 );
 
 -- Short activity trail shown on the owner's Profile page ("Recent
@@ -82,7 +87,8 @@ CREATE TABLE IF NOT EXISTS owner_activity (
   owner_id            TEXT NOT NULL REFERENCES farm_owners(id) ON DELETE CASCADE,
   action              TEXT NOT NULL,
   detail              TEXT,
-  created_at          TEXT DEFAULT (datetime('now'))
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS master_nodes (
@@ -100,7 +106,8 @@ CREATE TABLE IF NOT EXISTS master_nodes (
   last_ping           TEXT,
   firmware_version    TEXT,
   lat                 REAL,
-  lng                 REAL
+  lng                 REAL,
+  row_hash            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS piezo_sensors (
@@ -109,7 +116,8 @@ CREATE TABLE IF NOT EXISTS piezo_sensors (
   tree_id             TEXT,
   status              TEXT DEFAULT 'OPTIMAL',
   frequency_hz        REAL,
-  voltage_mv          REAL
+  voltage_mv          REAL,
+  row_hash            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS monitored_trees (
@@ -129,7 +137,8 @@ CREATE TABLE IF NOT EXISTS monitored_trees (
   assigned_node_id          TEXT REFERENCES master_nodes(id),
   piezo_sensor_id           TEXT,
   soil_moisture_percent     REAL,
-  ambient_temp_c            REAL
+  ambient_temp_c            REAL,
+  row_hash                  TEXT
 );
 
 -- Every raw reading a node/device sends in. Always written, regardless of
@@ -146,7 +155,8 @@ CREATE TABLE IF NOT EXISTS vibration_events (
   timestamp           TEXT DEFAULT (datetime('now')),
   pest_likely         INTEGER DEFAULT 0,
   pest_clicks         INTEGER,
-  pest_band_ratio     REAL
+  pest_band_ratio     REAL,
+  row_hash            TEXT
 );
 
 -- Reviewable alerts. alert_type distinguishes a hard-knock/tamper "impact"
@@ -170,7 +180,8 @@ CREATE TABLE IF NOT EXISTS alerts (
   created_at          TEXT DEFAULT (datetime('now')),
   reviewed            INTEGER DEFAULT 0,
   reviewed_at         TEXT,
-  reviewed_by         TEXT
+  reviewed_by         TEXT,
+  row_hash            TEXT
 );
 
 -- audience/owner_id split the same feed between the admin console and
@@ -186,7 +197,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   audience            TEXT DEFAULT 'admin',
   owner_id            TEXT REFERENCES farm_owners(id) ON DELETE CASCADE,
   created_at          TEXT DEFAULT (datetime('now')),
-  is_read             INTEGER DEFAULT 0
+  is_read             INTEGER DEFAULT 0,
+  row_hash            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS outbox_emails (
@@ -199,7 +211,8 @@ CREATE TABLE IF NOT EXISTS outbox_emails (
   created_at          TEXT DEFAULT (datetime('now')),
   status              TEXT DEFAULT 'sent',
   delivery_status     TEXT DEFAULT 'delivered',
-  delivery_error      TEXT
+  delivery_error      TEXT,
+  row_hash            TEXT
 );
 
 -- Admin console accounts. Separate from farm_owners -- an admin manages
@@ -222,7 +235,8 @@ CREATE TABLE IF NOT EXISTS admins (
   avatar_url          TEXT,
   -- Auth: "salt:hash" (scrypt, see server/auth.js) -- never returned by the API.
   password_hash       TEXT NOT NULL,
-  created_at          TEXT DEFAULT (datetime('now'))
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
 );
 
 -- One row per signed-in admin session. Same bearer-token pattern as
@@ -251,7 +265,8 @@ CREATE TABLE IF NOT EXISTS superadmins (
   -- Profile picture, edited from the Super Admin console's own Settings
   -- page. Same data-URL storage as farm_owners.avatar_url.
   avatar_url          TEXT,
-  created_at          TEXT DEFAULT (datetime('now'))
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS superadmin_sessions (
@@ -269,7 +284,8 @@ CREATE TABLE IF NOT EXISTS superadmin_activity (
   superadmin_id       TEXT NOT NULL REFERENCES superadmins(id) ON DELETE CASCADE,
   action              TEXT NOT NULL,
   detail              TEXT,
-  created_at          TEXT DEFAULT (datetime('now'))
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
 );
 
 -- ==INDEXES==

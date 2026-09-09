@@ -1,6 +1,23 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { severityForGrams, piezoSensorId } from '../utils.js';
+import { restampRowHash } from '../hash.js';
+
+// Alert History is a review queue, not a permanent archive -- capping
+// it keeps the admin/owner UI scrollable and the table from growing
+// forever. Once a new alert pushes the count past this, the oldest
+// alert (by created_at) is dropped, same "rolling window" pattern the
+// vibration_events cap below already uses.
+const MAX_ALERTS = 50;
+
+async function capAlerts() {
+  await db.prepare(
+    `DELETE FROM alerts
+     WHERE id NOT IN (
+       SELECT id FROM alerts ORDER BY created_at DESC, id DESC LIMIT ?
+     )`
+  ).run(MAX_ALERTS);
+}
 
 const router = Router();
 
@@ -84,7 +101,7 @@ router.post('/ingest-vibration', async (req, res) => {
 
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
-  await db.prepare(
+  const vibrationInsert = await db.prepare(
     `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
@@ -97,6 +114,7 @@ router.post('/ingest-vibration', async (req, res) => {
     pest_clicks ?? null,
     pest_band_ratio ?? null
   );
+  await restampRowHash(db, 'vibration_events', 'id', vibrationInsert.lastInsertRowid);
 
   // Cap raw readings at 10 per sensor -- once a new reading pushes a
   // sensor's count past 10, the oldest one for that sensor is dropped so
@@ -129,13 +147,14 @@ router.post('/ingest-vibration', async (req, res) => {
          signal_rssi = COALESCE(?, signal_rssi)
      WHERE id = ?`
   ).run(batteryPercent, signalRssi, node_id);
+  await restampRowHash(db, 'master_nodes', 'id', node_id);
 
   // 2. Impact/tamper alert -- logged for ANY non-normal hit, regardless
   //    of pest match. Goes to Alert History, NOT to notifications.
   //    Throttled per-node so a sustained hard vibration doesn't create
   //    a new alert on every single reading (see cooldown note above).
   if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
-    await db.prepare(
+    const impactInsert = await db.prepare(
       `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
        VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
     ).run(
@@ -146,6 +165,8 @@ router.post('/ingest-vibration', async (req, res) => {
       `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
       grams
     );
+    await restampRowHash(db, 'alerts', 'id', impactInsert.lastInsertRowid);
+    await capAlerts();
   }
 
   // 3. Pest alert + notification -- deliberately SEPARATE from the impact
@@ -154,26 +175,30 @@ router.post('/ingest-vibration', async (req, res) => {
   //    banner; an ordinary knock never does, even if it's severe.
   //    Also throttled per-node -- see cooldown note above.
   if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
-    await db.prepare(
+    const pestDescription =
+      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+      (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
+      (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : '');
+
+    const pestInsert = await db.prepare(
       `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
        VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
     ).run(
       'Pest Feeding Pattern Detected',
       sector ?? null,
       node_id,
-      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
-        (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
-        (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : ''),
+      pestDescription,
       grams
     );
+    await restampRowHash(db, 'alerts', 'id', pestInsert.lastInsertRowid);
+    await capAlerts();
 
-    await db.prepare(
+    const notificationMessage = `${sector ?? node_id} (${node_id}) matched a sustained feeding-pattern signature.`;
+    const notificationInsert = await db.prepare(
       `INSERT INTO notifications (icon, title, message, category)
-       VALUES ('alert-triangle', ?, ?, 'PEST')`
-    ).run(
-      'Pest Feeding Pattern Detected',
-      `${sector ?? node_id} (${node_id}) matched a sustained feeding-pattern signature.`
-    );
+       VALUES (?, ?, ?, ?)`
+    ).run('alert-triangle', 'Pest Feeding Pattern Detected', notificationMessage, 'PEST');
+    await restampRowHash(db, 'notifications', 'id', notificationInsert.lastInsertRowid);
   }
 
   res.json({ ok: true, severity, pest_likely: pestLikely });

@@ -9,6 +9,7 @@
 // in GMAIL_APP_PASSWORD.
 import nodemailer from 'nodemailer';
 import { db } from './db.js';
+import { restampRowHash } from './hash.js';
 
 let transporter = null;
 function getTransporter() {
@@ -61,10 +62,11 @@ export async function sendMail({ toName, toEmail, subject, body, html, category 
     }
   }
 
-  await db.prepare(
+  const emailInsert = await db.prepare(
     `INSERT INTO outbox_emails (to_name, to_email, subject, category, body, status, delivery_status, delivery_error)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(toName ?? null, toEmail ?? null, subject, category ?? 'system', body, status, deliveryStatus, deliveryError);
+  await restampRowHash(db, 'outbox_emails', 'id', emailInsert.lastInsertRowid);
 
   return { deliveryStatus, deliveryError };
 }

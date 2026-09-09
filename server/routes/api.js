@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, PIEZO_PINS, piezoSensorId } from '../utils.js';
+import { rowHash, restampRowHash } from '../hash.js';
 import {
   hashDefaultPassword,
   generateConfirmToken,
@@ -39,12 +40,15 @@ async function provisionMasterNodes(ownerId, sector, count) {
         (id, name, sector, owner_id, online, battery_percent, signal_rssi, total_sensors, working_sensors, damaged_sensors, last_ping, firmware_version)
        VALUES (?,?,?,?,1,100,?,4,3,0,datetime('now'),'v2.4.8-STABLE')`
     ).run(nodeId, `Master Node ${nodeNumber}`, sector ?? null, ownerId, '-58 dBm (Strong)');
+    await restampRowHash(db, 'master_nodes', 'id', nodeId);
 
     for (const pin of PIEZO_PINS) {
       const status = pin === 'A3' ? 'NOT_CONNECTED' : 'OPTIMAL';
+      const sensorId = piezoSensorId(nodeId, pin);
       await db.prepare(
         `INSERT INTO piezo_sensors (id, node_id, status, frequency_hz, voltage_mv) VALUES (?,?,?,?,?)`
-      ).run(piezoSensorId(nodeId, pin), nodeId, status, 0, status === 'NOT_CONNECTED' ? 0 : 3300);
+      ).run(sensorId, nodeId, status, 0, status === 'NOT_CONNECTED' ? 0 : 3300);
+      await restampRowHash(db, 'piezo_sensors', 'id', sensorId);
     }
   }
 }
@@ -251,6 +255,7 @@ router.post('/owners', async (req, res) => {
       b.sector ?? null, b.geoCoordinates ?? null, b.color ?? '#059669', b.initials ?? null,
       hashDefaultPassword(), hashConfirmToken(confirmToken), confirmTokenExpiryIso()
     );
+    await restampRowHash(db, 'farm_owners', 'id', b.id);
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
       return res.status(409).json({ ok: false, error: 'An owner with that id or email already exists.' });
@@ -326,6 +331,7 @@ router.post('/owners/:id/resend-invite', async (req, res) => {
       confirmTokenExpiryIso(),
       owner.id
     );
+    await restampRowHash(db, 'farm_owners', 'id', owner.id);
     subject = 'Reminder: Confirm Your CocoSense Account';
     body = confirmationEmailBody({ name: owner.name, id: owner.id, email: owner.email, token: confirmToken });
     html = confirmationEmailHtml({ name: owner.name, id: owner.id, email: owner.email, token: confirmToken });
@@ -357,8 +363,14 @@ router.delete('/owners/:id', async (req, res) => {
     await db.prepare(`DELETE FROM owner_settings WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`DELETE FROM owner_activity WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`DELETE FROM notifications WHERE owner_id = ?`).run(req.params.id);
+    const orphanedNodes = await db.prepare(`SELECT id FROM master_nodes WHERE owner_id = ?`).all(req.params.id);
+    const orphanedTrees = await db.prepare(`SELECT id FROM monitored_trees WHERE owner_id = ?`).all(req.params.id);
     await db.prepare(`UPDATE master_nodes SET owner_id = NULL WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`UPDATE monitored_trees SET owner_id = NULL WHERE owner_id = ?`).run(req.params.id);
+    // owner_id just changed on each of these -- restamp so their
+    // row_hash reflects the new (unlinked) data instead of going stale.
+    for (const node of orphanedNodes) await restampRowHash(db, 'master_nodes', 'id', node.id);
+    for (const tree of orphanedTrees) await restampRowHash(db, 'monitored_trees', 'id', tree.id);
     await db.prepare(`DELETE FROM farm_owners WHERE id = ?`).run(req.params.id);
     await db.exec('COMMIT');
   } catch (err) {
@@ -426,6 +438,7 @@ router.post('/nodes', async (req, res) => {
     b.totalSensors ?? 0, b.workingSensors ?? 0, b.damagedSensors ?? 0,
     b.firmwareVersion ?? null, b.coordinates?.[0] ?? null, b.coordinates?.[1] ?? null
   );
+  await restampRowHash(db, 'master_nodes', 'id', b.id);
   res.status(201).json({ ok: true, id: b.id });
 });
 
@@ -450,6 +463,7 @@ router.post('/trees', async (req, res) => {
     b.assignedNodeId ?? null, b.piezoSensorId ?? null,
     b.soilMoisturePercent ?? null, b.ambientTempC ?? null
   );
+  await restampRowHash(db, 'monitored_trees', 'id', b.id);
   res.status(201).json({ ok: true, id: b.id });
 });
 
@@ -468,7 +482,11 @@ router.get('/alerts', async (req, res) => {
   const params = [];
   if (type) { sql += ` AND alert_type = ?`; params.push(type); }
   if (reviewed !== undefined) { sql += ` AND reviewed = ?`; params.push(reviewed === 'true' ? 1 : 0); }
-  sql += ` ORDER BY created_at DESC`;
+  // Alert History is capped at 50 rows at write time (see
+  // server/routes/ingest.js), so this LIMIT is just a defensive
+  // backstop -- it keeps the endpoint's own contract honest even if
+  // rows were ever added some other way (seed data, a manual insert).
+  sql += ` ORDER BY created_at DESC LIMIT 50`;
   res.json(toCamel(await db.prepare(sql).all(...params)));
 });
 
@@ -477,6 +495,7 @@ router.patch('/alerts/:id/review', async (req, res) => {
   await db.prepare(
     `UPDATE alerts SET reviewed = 1, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?`
   ).run(reviewedBy ?? null, req.params.id);
+  await restampRowHash(db, 'alerts', 'id', req.params.id);
   res.json({ ok: true });
 });
 
@@ -487,12 +506,60 @@ router.get('/notifications', async (req, res) => {
 
 router.patch('/notifications/:id/read', async (req, res) => {
   await db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ?`).run(req.params.id);
+  await restampRowHash(db, 'notifications', 'id', req.params.id);
   res.json({ ok: true });
 });
 
 router.patch('/notifications/read-all', async (req, res) => {
+  const ids = (await db.prepare(`SELECT id FROM notifications WHERE is_read = 0`).all()).map((r) => r.id);
   await db.prepare(`UPDATE notifications SET is_read = 1`).run();
+  for (const id of ids) await restampRowHash(db, 'notifications', 'id', id);
   res.json({ ok: true });
+});
+
+// ---------- Data integrity check ----------
+// Every row written by this app carries a row_hash stamped at write
+// time (see server/hash.js). This endpoint re-hashes each row's
+// current data and compares it against that stamp -- a mismatch means
+// the row was changed by something other than this app's own code
+// (e.g. a hand-edited value in the Turso console), which is exactly
+// the kind of tampering a stamped-at-write hash is meant to catch.
+const HASHED_TABLES = {
+  farmOwners: { table: 'farm_owners', idColumn: 'id' },
+  masterNodes: { table: 'master_nodes', idColumn: 'id' },
+  piezoSensors: { table: 'piezo_sensors', idColumn: 'id' },
+  monitoredTrees: { table: 'monitored_trees', idColumn: 'id' },
+  vibrationEvents: { table: 'vibration_events', idColumn: 'id' },
+  alerts: { table: 'alerts', idColumn: 'id' },
+  notifications: { table: 'notifications', idColumn: 'id' },
+  outboxEmails: { table: 'outbox_emails', idColumn: 'id' },
+  admins: { table: 'admins', idColumn: 'id' },
+  superadmins: { table: 'superadmins', idColumn: 'id' },
+  ownerSettings: { table: 'owner_settings', idColumn: 'owner_id' },
+  ownerActivity: { table: 'owner_activity', idColumn: 'id' },
+  superadminActivity: { table: 'superadmin_activity', idColumn: 'id' },
+};
+
+router.get('/integrity-check', async (req, res) => {
+  const requested = req.query.table ? [req.query.table] : Object.keys(HASHED_TABLES);
+  const report = {};
+
+  for (const key of requested) {
+    const spec = HASHED_TABLES[key];
+    if (!spec) {
+      report[key] = { error: 'Unknown table.' };
+      continue;
+    }
+    const rows = await db.prepare(`SELECT * FROM ${spec.table}`).all();
+    const mismatches = [];
+    for (const row of rows) {
+      const { row_hash, ...fields } = row;
+      if (row_hash && row_hash !== rowHash(fields)) mismatches.push(row[spec.idColumn]);
+    }
+    report[key] = { checked: rows.length, mismatched: mismatches.length, mismatchedIds: mismatches };
+  }
+
+  res.json({ ok: true, report });
 });
 
 export default router;

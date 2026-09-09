@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, validateAvatarDataUrl } from '../utils.js';
 import { verifyPassword, generateSessionToken, sessionExpiryIso } from '../auth.js';
+import { restampRowHash } from '../hash.js';
 
 const router = Router();
 
@@ -102,6 +103,7 @@ router.patch('/admin/profile', requireAdminAuth, async (req, res) => {
       avatarUrl,
       req.adminRow.id
     );
+    await restampRowHash(db, 'admins', 'id', req.adminRow.id);
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
       return res.status(409).json({ ok: false, error: 'That email is already in use by another account.' });

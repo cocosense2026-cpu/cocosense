@@ -172,6 +172,23 @@ const migrations = [
   `ALTER TABLE admins ADD COLUMN avatar_url TEXT`,
   `ALTER TABLE superadmins ADD COLUMN avatar_url TEXT`,
   `ALTER TABLE vibration_events ADD COLUMN piezo_sensor_id TEXT`,
+  // row_hash: SHA-256 integrity fingerprint of each row's data fields,
+  // stamped at write time (see server/hash.js). Added across every
+  // data table -- not just new ones -- so a pre-existing database
+  // upgrades to the same guarantee new rows get.
+  `ALTER TABLE farm_owners ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE owner_settings ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE owner_activity ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE master_nodes ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE piezo_sensors ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE monitored_trees ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE vibration_events ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE alerts ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE notifications ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE outbox_emails ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE admins ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE superadmins ADD COLUMN row_hash TEXT`,
+  `ALTER TABLE superadmin_activity ADD COLUMN row_hash TEXT`,
 ];
 for (const sql of migrations) {
   try { await db.exec(sql); } catch { /* column already exists -- fine */ }

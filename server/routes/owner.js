@@ -14,15 +14,17 @@ import {
   hashConfirmToken,
 } from '../auth.js';
 import { sendMail } from '../mailer.js';
+import { restampRowHash } from '../hash.js';
 
 const router = Router();
 
 async function logActivity(ownerId, action, detail) {
-  await db.prepare(`INSERT INTO owner_activity (owner_id, action, detail) VALUES (?, ?, ?)`).run(
+  const result = await db.prepare(`INSERT INTO owner_activity (owner_id, action, detail) VALUES (?, ?, ?)`).run(
     ownerId,
     action,
     detail ?? null
   );
+  await restampRowHash(db, 'owner_activity', 'id', result.lastInsertRowid);
 }
 
 function publicOwner(row) {
@@ -115,6 +117,7 @@ router.post('/owner/auth/change-password', requireOwnerAuth, async (req, res) =>
     hashPassword(newPassword),
     req.ownerRow.id
   );
+  await restampRowHash(db, 'farm_owners', 'id', req.ownerRow.id);
   await logActivity(req.ownerRow.id, 'Password changed', null);
   res.json({ ok: true });
 });
@@ -148,6 +151,7 @@ router.post('/owner/auth/confirm', async (req, res) => {
   await db.prepare(
     `UPDATE farm_owners SET account_confirmed = 1, confirm_token_hash = NULL, confirm_token_expires = NULL WHERE id = ?`
   ).run(owner.id);
+  await restampRowHash(db, 'farm_owners', 'id', owner.id);
   await logActivity(owner.id, 'Email confirmed', null);
 
   res.json({ ok: true, ownerName: owner.name, email: owner.email });
@@ -171,6 +175,7 @@ router.post('/owner/auth/forgot-password', async (req, res) => {
     resetCodeExpiryIso(),
     owner.id
   );
+  await restampRowHash(db, 'farm_owners', 'id', owner.id);
 
   const { deliveryStatus } = await sendMail({
     toName: owner.name,
@@ -234,6 +239,7 @@ router.post('/owner/auth/reset-password', async (req, res) => {
      SET password_hash = ?, must_change_password = 0, reset_code_hash = NULL, reset_code_expires = NULL
      WHERE id = ?`
   ).run(hashPassword(newPassword), owner.id);
+  await restampRowHash(db, 'farm_owners', 'id', owner.id);
   await logActivity(owner.id, 'Password reset', 'Reset via the forgot-password flow.');
 
   res.json({ ok: true });
@@ -275,6 +281,7 @@ router.patch('/owner/me', requireOwnerAuth, async (req, res) => {
        SET first_name = ?, middle_name = ?, last_name = ?, name = ?, initials = ?, email = ?, phone = ?, avatar_url = ?
        WHERE id = ?`
     ).run(firstName, middleName, lastName, name, initials, email, phone, avatarUrl, req.ownerRow.id);
+    await restampRowHash(db, 'farm_owners', 'id', req.ownerRow.id);
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
       return res.status(409).json({ ok: false, error: 'That email is already in use by another account.' });
@@ -637,15 +644,30 @@ router.patch('/owner/notifications/:id/read', requireOwnerAuth, async (req, res)
            WHERE n.owner_id = ? OR t.owner_id = ?
          )`
     ).run(req.ownerRow.name, id, req.ownerRow.id, req.ownerRow.id);
+    await restampRowHash(db, 'alerts', 'id', id);
   } else {
     await db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ? AND owner_id = ?`).run(id, req.ownerRow.id);
+    await restampRowHash(db, 'notifications', 'id', id);
   }
   res.json({ ok: true });
 });
 
 router.post('/owner/notifications/read-all', requireOwnerAuth, async (req, res) => {
   const ownerId = req.ownerRow.id;
+  const unreadNotifIds = (
+    await db.prepare(`SELECT id FROM notifications WHERE audience = 'owner' AND owner_id = ? AND is_read = 0`).all(ownerId)
+  ).map((r) => r.id);
   await db.prepare(`UPDATE notifications SET is_read = 1 WHERE audience = 'owner' AND owner_id = ?`).run(ownerId);
+  for (const id of unreadNotifIds) await restampRowHash(db, 'notifications', 'id', id);
+
+  const affectedAlertIds = (
+    await db.prepare(
+      `SELECT a.id FROM alerts a
+       LEFT JOIN master_nodes n ON a.node_id = n.id
+       LEFT JOIN monitored_trees t ON a.tree_id = t.id
+       WHERE (n.owner_id = ? OR t.owner_id = ?) AND a.reviewed = 0`
+    ).all(ownerId, ownerId)
+  ).map((r) => r.id);
   await db.prepare(
     `UPDATE alerts SET reviewed = 1, reviewed_at = datetime('now'), reviewed_by = ?
      WHERE id IN (
@@ -655,6 +677,7 @@ router.post('/owner/notifications/read-all', requireOwnerAuth, async (req, res) 
        WHERE n.owner_id = ? OR t.owner_id = ?
      )`
   ).run(req.ownerRow.name, ownerId, ownerId);
+  for (const id of affectedAlertIds) await restampRowHash(db, 'alerts', 'id', id);
   res.json({ ok: true });
 });
 
@@ -676,6 +699,7 @@ async function getOrCreateOwnerSettings(ownerId) {
   let row = await db.prepare(`SELECT * FROM owner_settings WHERE owner_id = ?`).get(ownerId);
   if (!row) {
     await db.prepare(`INSERT INTO owner_settings (owner_id) VALUES (?)`).run(ownerId);
+    await restampRowHash(db, 'owner_settings', 'owner_id', ownerId);
     row = await db.prepare(`SELECT * FROM owner_settings WHERE owner_id = ?`).get(ownerId);
   }
   return row;
@@ -702,6 +726,7 @@ router.patch('/owner/settings', requireOwnerAuth, async (req, res) => {
     b.theme === 'Light' ? 'Light' : 'Dark',
     req.ownerRow.id
   );
+  await restampRowHash(db, 'owner_settings', 'owner_id', req.ownerRow.id);
   res.json(toCamel(await getOrCreateOwnerSettings(req.ownerRow.id)));
 });
 
