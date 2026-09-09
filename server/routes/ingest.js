@@ -169,7 +169,7 @@ router.post('/ingest-vibration', async (req, res) => {
 
     await db.prepare(
       `INSERT INTO notifications (icon, title, message, category)
-       VALUES ('alert-triangle', ?, ?, 'pest')`
+       VALUES ('alert-triangle', ?, ?, 'PEST')`
     ).run(
       'Pest Feeding Pattern Detected',
       `${sector ?? node_id} (${node_id}) matched a sustained feeding-pattern signature.`

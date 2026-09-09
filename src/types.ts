@@ -114,26 +114,14 @@ export interface NotificationItem {
   icon?: string;
   title: string;
   message: string;
-  category: 'alert' | 'hardware' | 'system' | 'owner' | 'report' | 'ALERTS' | 'HARDWARE' | 'SYSTEM' | 'INVITATIONS' | string;
+  // Notifications are now pest-detection-only (see server/routes/ingest.js),
+  // but the string fallback is kept for older rows already sitting in the
+  // database from before this change.
+  category: 'PEST' | string;
   createdAt?: string;
   timestamp?: string;
   isRead?: boolean;
   read?: boolean;
-}
-
-export interface OutboxEmail {
-  id: number | string;
-  to?: string;
-  toName?: string;
-  toEmail?: string;
-  subject: string;
-  category?: 'credentials' | 'alert_summary' | 'system_notice' | 'invite' | string;
-  body: string;
-  createdAt?: string;
-  sentAt?: string;
-  status?: string;
-  deliveryStatus?: 'delivered' | 'failed' | 'not_sent' | string;
-  deliveryError?: string;
 }
 
 export interface PSGCRegion {

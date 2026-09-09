@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, AlertTriangle, Bug, Mail, PartyPopper, Trash2, Clock, Inbox } from 'lucide-react';
+import { Bell, CheckCheck, AlertTriangle, Bug, Trash2, Clock, Inbox } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -15,17 +15,17 @@ interface NotifItem {
   isRead: boolean;
 }
 
+// Pest detection is the only notification category now, so "All" and
+// "Pest Activity" resolve to the same feed -- the tabs are kept simple
+// rather than offering categories that will never have anything in them.
 const TABS = [
   { key: 'all', label: 'All' },
   { key: 'alert', label: 'Pest Activity' },
-  { key: 'system', label: 'System' },
 ];
 
 const ICONS: Record<string, React.ComponentType<any>> = {
   bug: Bug,
   'alert-triangle': AlertTriangle,
-  'party-popper': PartyPopper,
-  mail: Mail,
   bell: Bell,
 };
 
@@ -105,7 +105,7 @@ export const NotificationsPage: React.FC = () => {
         eyebrow="Farm Owner Portal"
         subtitle="Notifications"
         title="Notifications"
-        description="Stay updated with real-time system alerts and plantation status. Pest activity, sensor health and account updates all land here as they happen."
+        description="Stay updated with real-time bioacoustic pest detection alerts across your plantation."
         actions={
           <button
             type="button"

@@ -12,7 +12,6 @@ import {
   Cpu, 
   FileText, 
   Bell, 
-  Mail, 
   Settings, 
   X,
   ChevronRight,
@@ -30,7 +29,6 @@ export type ActiveView =
   | 'diagnostics'
   | 'reports'
   | 'notifications'
-  | 'outbox'
   | 'settings';
 
 interface NavigationProps {
@@ -77,7 +75,6 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'diagnostics' as ActiveView, label: 'Hardware Diagnostic', icon: Cpu, badge: null },
     { id: 'reports' as ActiveView, label: 'Bioacoustic Reports', icon: FileText, badge: null },
     { id: 'notifications' as ActiveView, label: 'Notifications', icon: Bell, badge: unreadCount > 0 ? `${unreadCount}` : null },
-    { id: 'outbox' as ActiveView, label: 'SMTP Outbox', icon: Mail, badge: null },
     { id: 'settings' as ActiveView, label: 'Settings & Security', icon: Settings, badge: null },
   ];
 

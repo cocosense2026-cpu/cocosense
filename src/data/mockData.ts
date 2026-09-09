@@ -1,4 +1,4 @@
-import { FarmOwner, MonitoredTree, MasterNode, PestAlert, VibrationEvent, NotificationItem, OutboxEmail, PSGCRegion, LaravelComponentDef } from '../types';
+import { FarmOwner, MonitoredTree, MasterNode, PestAlert, VibrationEvent, NotificationItem, PSGCRegion, LaravelComponentDef } from '../types';
 
 export const INITIAL_OWNERS: FarmOwner[] = [
   {
@@ -532,35 +532,12 @@ export const INITIAL_VIBRATION_EVENTS: VibrationEvent[] = [
   { id: 'VIB-9916', sector: 'Sector Echo', treeId: 'TR-5501', nodeId: 'NODE-005', grams: 0.08, frequencyHz: 38, severity: 'Normal', timestamp: '2h ago', pestProbability: 4 },
 ];
 
+// Notifications are pest-detection-only (see server/routes/ingest.js,
+// which is the sole source of real notification rows) -- this demo/
+// offline-fallback list mirrors that.
 export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  { id: 1, icon: 'alert-triangle', title: 'Critical Pest Signature in Sector Charlie', message: 'Red Palm Weevil detected in tree TR-3301 with 98% bioacoustic match.', category: 'alert', createdAt: '10m ago', isRead: false },
-  { id: 2, icon: 'wifi', title: 'Master Node 003 Signal Lost', message: 'Node battery discharged below 15%. Physical inspection recommended.', category: 'hardware', createdAt: '14h ago', isRead: false },
-  { id: 3, icon: 'user', title: 'New Farm Owner Registered', message: 'Cheska Cate Victorio was onboarded with 5 Master Nodes in Aurora.', category: 'owner', createdAt: '2d ago', isRead: true },
-  { id: 4, icon: 'file-text', title: 'Monthly Bioacoustic Report Ready', message: 'February 2026 plantation health synthesis is available for download.', category: 'report', createdAt: '3d ago', isRead: true },
-  { id: 5, icon: 'zap', title: 'Firmware Mesh v2.4.8 Broadcasted', message: '4 of 5 master nodes successfully updated their acoustic DSP kernels.', category: 'system', createdAt: '5d ago', isRead: true },
-];
-
-export const INITIAL_OUTBOX: OutboxEmail[] = [
-  {
-    id: 1,
-    toName: 'Antonio Silva',
-    toEmail: 'antonio.silva@agrimail.com',
-    subject: 'Confirm your CocoSense Farm Owner account',
-    category: 'credentials',
-    body: `Dear Antonio Silva,\n\nWelcome to CocoSense Smart Coconut Plantation Monitoring! Your account has been provisioned.\n\nYour Temporary Password: [REDACTED_SECURE_TOKEN]\nConfirmation Link: https://cocosense.app/owner/confirm?token=e08f1b6748432a\n\nPlease confirm your email within 24 hours to activate your bioacoustic sensor telemetry stream.\n\nRegards,\nCocoSense Plantation System`,
-    createdAt: '2025-11-14 09:30',
-    deliveryStatus: 'delivered',
-  },
-  {
-    id: 2,
-    toName: 'Cheska Cate Victorio',
-    toEmail: 'cheskacatevictorio@ascot.edu.ph',
-    subject: 'Your CocoSense Farm Owner Invitation (Sector Delta)',
-    category: 'credentials',
-    body: `Dear Cheska Cate Victorio,\n\nYour CocoSense account for ASCOT Agro-Forestry Plantation (Sector Delta) is ready.\n\nAssigned Master Nodes: 5 (NODE-004 + 4 Sub-Hubs)\nSensors: 30 Piezoelectric Sensors\nConfirmation Link: https://cocosense.app/owner/confirm?token=9ab348cd901e\n\nSign in to view real-time bioacoustic pest monitoring on your trees.\n\nRegards,\nCocoSense Team`,
-    createdAt: '2026-02-10 14:15',
-    deliveryStatus: 'delivered',
-  }
+  { id: 1, icon: 'alert-triangle', title: 'Critical Pest Signature in Sector Charlie', message: 'Red Palm Weevil detected in tree TR-3301 with 98% bioacoustic match.', category: 'PEST', createdAt: '10m ago', isRead: false },
+  { id: 2, icon: 'alert-triangle', title: 'Pest Feeding Pattern Detected', message: 'Sector Delta (NODE-004) matched a sustained feeding-pattern signature.', category: 'PEST', createdAt: '14h ago', isRead: true },
 ];
 
 // CocoSense only operates in Aurora province (Region III / Central

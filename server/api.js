@@ -237,6 +237,18 @@ router.post('/owners', async (req, res) => {
 
   const confirmToken = generateConfirmToken();
 
+  // The owner row, its Master Nodes/piezo sensors, and its welcome
+  // notification are all-or-nothing: previously provisionMasterNodes
+  // ran with no transaction at all, so a mid-provisioning failure (e.g.
+  // a stale/colliding node id) left a real farm_owners row committed
+  // with zero hardware attached -- invisible in most of the UI, but a
+  // landmine for the next attempt using the same owner id (its node
+  // numbering would restart from 1 and immediately collide with
+  // whatever the failed attempt managed to insert before it died).
+  // Wrapping the whole sequence in one transaction means a failure at
+  // any point rolls everything back, so a retry starts from a clean
+  // slate instead of colliding with a half-written previous attempt.
+  await db.exec('BEGIN');
   try {
     await db.prepare(
       `INSERT INTO farm_owners
@@ -251,46 +263,41 @@ router.post('/owners', async (req, res) => {
       b.sector ?? null, b.geoCoordinates ?? null, b.color ?? '#059669', b.initials ?? null,
       hashDefaultPassword(), hashConfirmToken(confirmToken), confirmTokenExpiryIso()
     );
+
+    // Provision the hardware the admin selected in "Initial Master
+    // Nodes" on the Add Owner form -- this is what makes that many
+    // devices (and this many Vibration Intensity panels, in the Owner
+    // Portal) actually exist for the owner from day one, instead of
+    // only after the first Expand Nodes action.
+    await provisionMasterNodes(b.id, b.sector ?? null, Math.max(1, Math.min(20, Number(b.nodesCount) || 1)));
+
+    // No "Welcome to CocoSense" notification here on purpose --
+    // notifications are pest-detection-only now (see routes/ingest.js).
+
+    await db.exec('COMMIT');
   } catch (err) {
+    await db.exec('ROLLBACK');
     if (String(err.message).includes('UNIQUE')) {
       return res.status(409).json({ ok: false, error: 'An owner with that id or email already exists.' });
     }
     throw err;
   }
 
-  // Provision the hardware the admin selected in "Initial Master Nodes"
-  // on the Add Owner form -- this is what makes that many devices (and
-  // this many Vibration Intensity panels, in the Owner Portal) actually
-  // exist for the owner from day one, instead of only after the first
-  // Expand Nodes action.
-  await provisionMasterNodes(b.id, b.sector ?? null, Math.max(1, Math.min(20, Number(b.nodesCount) || 1)));
-
-  // No "Welcome to CocoSense" notification is created here on purpose --
-  // notifications are pest-detection-only now (see server/routes/ingest.js,
-  // the sole remaining source of notification rows).
-
-  // Respond to the admin as soon as the account itself exists --
-  // everything the "Register & Dispatch Email" button actually needs
-  // to stop spinning is done. The email send is fire-and-forget from
-  // here: it can still take several seconds (or fail/timeout) without
-  // ever making the Add Owner modal look "stuck". sendMail() already
-  // catches its own errors and always logs to outbox_emails internally,
-  // so there's nothing to await or re-throw here.
-  res.status(201).json({ ok: true, id: b.id, emailPending: true });
-
-  sendMail({
+  // Sending the confirmation email is an external side effect, not a DB
+  // write -- it runs after COMMIT so a slow/failed mail send can never
+  // hold the transaction lock open, and its own failure (already
+  // handled gracefully inside sendMail) doesn't undo the account that
+  // was just successfully created.
+  const { deliveryStatus, deliveryError } = await sendMail({
     toName: b.name,
     toEmail: b.email,
     subject: 'Welcome to CocoSense — Confirm Your Account',
     category: 'credentials',
     body: confirmationEmailBody({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
     html: confirmationEmailHtml({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
-  }).catch((err) => {
-    // Belt-and-suspenders: sendMail already swallows its own errors
-    // internally, but if something upstream of that throws (e.g. the
-    // outbox INSERT itself), don't let it become an unhandled rejection.
-    console.error('[owners] background confirmation email failed:', err);
   });
+
+  res.status(201).json({ ok: true, id: b.id, emailDeliveryStatus: deliveryStatus, emailDeliveryError: deliveryError });
 });
 
 // Note: owner login/change-password used to live here too, before the

@@ -1,13 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { NotificationItem } from '../types';
 import { 
   Bell, 
   CheckCheck, 
   Trash2, 
   AlertTriangle, 
-  Radio, 
-  Cpu, 
-  Mail, 
   Clock 
 } from 'lucide-react';
 
@@ -24,12 +21,10 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   onClearAll,
   onToggleRead,
 }) => {
-  const [activeCategory, setActiveCategory] = useState<string>('ALL');
-
-  const filtered = notifications.filter(n => {
-    if (activeCategory === 'ALL') return true;
-    return n.category === activeCategory;
-  });
+  // Pest detection is now the only notification category (see
+  // server/routes/ingest.js -- the sole source of real notification
+  // rows), so there's nothing left to filter by.
+  const filtered = notifications;
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -41,7 +36,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
             Live Notification Center
           </h1>
           <p className="text-xs text-[#808080] mt-1 font-light">
-            Real-time system events, hardware transducer warnings, and farm owner registration status.
+            Real-time bioacoustic pest detection alerts across every monitored sector.
           </p>
         </div>
 
@@ -65,36 +60,18 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         </div>
       </div>
 
-      {/* Category Pills */}
-      <div className="flex flex-wrap gap-2">
-        {['ALL', 'ALERTS', 'HARDWARE', 'INVITATIONS', 'SYSTEM'].map(cat => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => setActiveCategory(cat)}
-            className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all ${
-              activeCategory === cat
-                ? 'bg-[#D4AF37] text-black font-bold shadow-md'
-                : 'bg-[#141414] text-[#808080] hover:text-white border border-[#262626]'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
-
       {/* Notifications List */}
       <div className="space-y-3">
         {filtered.length === 0 ? (
           <div className="rounded bg-[#141414] border border-[#262626] p-12 text-center text-[#808080]">
             <Bell className="w-10 h-10 text-[#808080]/40 mx-auto mb-3" />
-            <h3 className="font-bold text-white text-base">No notifications in this category</h3>
+            <h3 className="font-bold text-white text-base">No pest detection notifications yet</h3>
           </div>
         ) : (
           filtered.map(item => (
             <div
               key={item.id}
-              onClick={() => onToggleRead(item.id)}
+              onClick={() => onToggleRead(String(item.id))}
               className={`p-4 rounded border transition-all cursor-pointer flex items-start justify-between gap-4 ${
                 item.read
                   ? 'bg-[#101010] border-[#262626] opacity-70'
@@ -102,14 +79,8 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
               }`}
             >
               <div className="flex items-start gap-3.5">
-                <div className={`p-2.5 rounded flex-shrink-0 ${
-                  item.category === 'ALERTS' ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30' :
-                  item.category === 'HARDWARE' ? 'bg-[#262010] text-[#D4AF37] border border-[#D4AF37]/30' :
-                  'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
-                }`}>
-                  {item.category === 'ALERTS' ? <AlertTriangle className="w-4 h-4" /> :
-                   item.category === 'HARDWARE' ? <Radio className="w-4 h-4" /> :
-                   <Mail className="w-4 h-4" />}
+                <div className="p-2.5 rounded flex-shrink-0 bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30">
+                  <AlertTriangle className="w-4 h-4" />
                 </div>
 
                 <div>
@@ -122,7 +93,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                   <p className="text-xs text-[#E0E0E0] mt-0.5">{item.message}</p>
                   <div className="text-[11px] text-[#808080] font-mono mt-1.5 flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
-                    <span>{item.timestamp}</span>
+                    <span>{item.timestamp || item.createdAt}</span>
                   </div>
                 </div>
               </div>

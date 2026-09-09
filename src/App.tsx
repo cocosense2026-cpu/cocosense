@@ -5,10 +5,9 @@ import {
   INITIAL_NODES, 
   INITIAL_ALERTS, 
   INITIAL_NOTIFICATIONS, 
-  INITIAL_OUTBOX, 
   INITIAL_VIBRATION_EVENTS 
 } from './data/mockData';
-import { MonitoredTree, FarmOwner, MasterNode, PestAlert, NotificationItem, OutboxEmail, VibrationEvent } from './types';
+import { MonitoredTree, FarmOwner, MasterNode, PestAlert, NotificationItem, VibrationEvent } from './types';
 import { Navigation, ActiveView } from './components/Navigation';
 import { BrandLogo } from './components/BrandLogo';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -20,7 +19,6 @@ import { AlertHistoryView } from './views/AlertHistoryView';
 import { DiagnosticsView } from './views/DiagnosticsView';
 import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
-import { OutboxView } from './views/OutboxView';
 import { SettingsView } from './views/SettingsView';
 import { Search, Bell, Radio, AlertTriangle, Menu } from 'lucide-react';
 import { usePolling } from './hooks/usePolling';
@@ -42,7 +40,6 @@ export function App() {
   const [nodes, setNodes] = useState<MasterNode[]>(INITIAL_NODES);
   const [alerts, setAlerts] = useState<PestAlert[]>(INITIAL_ALERTS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
-  const [outbox, setOutbox] = useState<OutboxEmail[]>(INITIAL_OUTBOX);
   const [vibrationEvents, setVibrationEvents] = useState<VibrationEvent[]>(INITIAL_VIBRATION_EVENTS);
 
   // Toast Notification state
@@ -51,7 +48,7 @@ export function App() {
   // Load real data from the database on start, so the console reflects
   // what's actually in Turso instead of the bundled demo/mock data
   // (previously only the Farm Owners list did this -- Nodes, Trees,
-  // Alerts, Notifications, Outbox, and the raw Vibration log were all
+  // Alerts, Notifications, and the raw Vibration log were all
   // silently showing the static mock data forever, even in production).
   // Falls back to the demo data already in state above if the backend
   // isn't reachable, so nothing breaks if it's not running yet.
@@ -67,10 +64,9 @@ export function App() {
       get('/trees'),
       get('/alerts'),
       get('/notifications'),
-      get('/outbox'),
       get('/vibration-events?limit=100'),
     ])
-      .then(([ownersRows, nodesRows, treesRows, alertsRows, notificationsRows, outboxRows, vibrationRows]) => {
+      .then(([ownersRows, nodesRows, treesRows, alertsRows, notificationsRows, vibrationRows]) => {
         setOwners(
           ownersRows.map((o: any) => ({
             ...o,
@@ -84,7 +80,6 @@ export function App() {
         setTrees(treesRows);
         setAlerts(alertsRows.map((a: any) => ({ ...a, reviewed: !!a.reviewed })));
         setNotifications(notificationsRows.map((n: any) => ({ ...n, isRead: !!n.isRead })));
-        setOutbox(outboxRows);
         setVibrationEvents(vibrationRows);
       })
       .catch((err) => {
@@ -143,7 +138,7 @@ export function App() {
     // Try the real backend first: persists to the database, sets the
     // default password (user123, must be changed on first login), and
     // sends the confirmation email (real Gmail send if configured in
-    // .env, otherwise logged to Outbox only -- see server/mailer.js).
+    // .env -- see server/mailer.js).
     //
     // Network failure (server not running) and an explicit rejection
     // from the server (duplicate account, bad data) are handled very
@@ -162,27 +157,6 @@ export function App() {
     } catch (networkErr) {
       console.warn('Backend unreachable, falling back to local-only simulation:', networkErr);
       setOwners(prev => [createdOwner, ...prev]);
-
-      const newEmail: OutboxEmail = {
-        id: `EM-${Date.now()}`,
-        to: createdOwner.email,
-        subject: 'Welcome to CocoSense Smart Plantation Monitoring',
-        body: `Mabuhay ${createdOwner.name},\n\nYour farm located at ${createdOwner.address} has been successfully provisioned with ${createdOwner.nodesCount} Master Control Node(s).\n\nPlease verify your account at https://cocosense.ph/verify?owner=${createdOwner.id}`,
-        sentAt: 'Just now',
-        status: 'Sent (250 OK)',
-      };
-      setOutbox(prev => [newEmail, ...prev]);
-
-      const newNotif: NotificationItem = {
-        id: `NOTIF-${Date.now()}`,
-        title: 'New Farm Owner Provisioned',
-        message: `${createdOwner.name} registered with ${createdOwner.nodesCount} Master Nodes in ${createdOwner.cityMunicipality}, ${createdOwner.province}.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'INVITATIONS',
-      };
-      setNotifications(prev => [newNotif, ...prev]);
-
       showToast(`Registered ${createdOwner.name} (backend offline — simulated locally only).`);
       return;
     }
@@ -196,37 +170,7 @@ export function App() {
     }
 
     setOwners(prev => [createdOwner, ...prev]);
-
-    // The server now sends the confirmation email in the background
-    // (see server/routes/api.js) instead of making this request wait on
-    // SMTP, so we don't know the real delivery outcome yet -- the next
-    // poll of the Outbox (usePolling, every 10s) will pick up the real
-    // status once it lands. Show a placeholder row so the admin sees
-    // something immediately, but don't claim a delivery status we
-    // haven't actually observed.
-    const newEmail: OutboxEmail = {
-      id: `EM-${Date.now()}`,
-      to: createdOwner.email,
-      subject: 'Welcome to CocoSense — Confirm Your Account',
-      body: `Mabuhay ${createdOwner.name},\n\nYour CocoSense monitoring account has been created.\n\n  Owner ID: ${createdOwner.id}\n  Login email: ${createdOwner.email}\n  Temporary password: user123\n\nA confirmation link was sent to your email -- you'll need to click it before you can sign in.`,
-      sentAt: 'Just now',
-      status: 'Sending…',
-      deliveryStatus: undefined,
-      deliveryError: undefined,
-    };
-    setOutbox(prev => [newEmail, ...prev]);
-
-    const newNotif: NotificationItem = {
-      id: `NOTIF-${Date.now()}`,
-      title: 'New Farm Owner Provisioned',
-      message: `${createdOwner.name} registered with ${createdOwner.nodesCount} Master Nodes in ${createdOwner.cityMunicipality}, ${createdOwner.province}.`,
-      timestamp: 'Just now',
-      read: false,
-      category: 'INVITATIONS',
-    };
-    setNotifications(prev => [newNotif, ...prev]);
-
-    showToast(`Registered ${createdOwner.name}. Confirmation email is sending -- check the Outbox for delivery status.`);
+    showToast(`Registered ${createdOwner.name}. Confirmation email is on its way.`);
   };
 
   const handleDeleteOwner = async (ownerId: string) => {
@@ -246,8 +190,15 @@ export function App() {
       return;
     }
 
+    // The server route deletes the row (and its sessions/settings/
+    // activity/notifications) from the database in one transaction, so
+    // this optimistic local update should already match what's in
+    // Turso -- but re-pull immediately anyway instead of waiting for
+    // the next 10s poll, so the admin never sees a stale directory that
+    // disagrees with the database.
     setOwners(prev => prev.filter(o => o.id !== ownerId));
-    showToast(`Removed owner ${ownerId} from directory.`);
+    loadAll(false);
+    showToast(`Removed owner ${ownerId} from directory and the database.`);
   };
 
   const handleExpandNodes = async (ownerId: string, additionalNodes: number) => {
@@ -289,50 +240,17 @@ export function App() {
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || 'Failed to resend invite');
 
-      const newEmail: OutboxEmail = {
-        id: `EM-${Date.now()}`,
-        to: owner.email,
-        subject: 'Reminder: Activate Your CocoSense Account',
-        body: `Hello ${owner.name},\n\nYour monitoring station credentials for ${owner.sector} (${owner.id}) are pending confirmation.`,
-        sentAt: 'Just now',
-        status: result.emailDeliveryStatus === 'delivered' ? 'Sent (250 OK)' : 'Logged (SMTP not configured)',
-        deliveryStatus: result.emailDeliveryStatus,
-        deliveryError: result.emailDeliveryError,
-      };
-      setOutbox(prev => [newEmail, ...prev]);
       showToast(
         result.emailDeliveryStatus === 'delivered'
           ? `Re-dispatched invitation credentials to ${owner.email}.`
-          : `Logged reminder to Outbox (SMTP not configured — see .env).`
+          : `Invitation reminder queued for ${owner.email} (SMTP not configured — see .env).`
       );
       return;
     } catch (err) {
       console.warn('Backend unavailable, falling back to local-only simulation:', err);
     }
 
-    const newEmail: OutboxEmail = {
-      id: `EM-${Date.now()}`,
-      to: owner.email,
-      subject: 'Reminder: Activate Your CocoSense Plantation Account',
-      body: `Hello ${owner.name},\n\nYour monitoring station credentials for ${owner.sector} (${owner.id}) are pending confirmation.\n\nLink: https://cocosense.ph/verify?owner=${owner.id}`,
-      sentAt: 'Just now',
-      status: 'Sent (250 OK)',
-    };
-    setOutbox(prev => [newEmail, ...prev]);
     showToast(`Re-dispatched invitation credentials to ${owner.email} (backend offline — simulated locally only).`);
-  };
-
-  const handleSendBroadcast = (recipient: string, subject: string, body: string) => {
-    const newEmail: OutboxEmail = {
-      id: `EM-${Date.now()}`,
-      to: recipient,
-      subject,
-      body,
-      sentAt: 'Just now',
-      status: 'Sent (250 OK)',
-    };
-    setOutbox(prev => [newEmail, ...prev]);
-    showToast(`Dispatched broadcast message to ${recipient}.`);
   };
 
   const handleMarkAllNotificationsRead = () => {
@@ -503,13 +421,6 @@ export function App() {
               onMarkAllRead={handleMarkAllNotificationsRead}
               onClearAll={handleClearAllNotifications}
               onToggleRead={handleToggleNotificationRead}
-            />
-          )}
-
-          {currentView === 'outbox' && (
-            <OutboxView
-              outbox={outbox}
-              onSendBroadcast={handleSendBroadcast}
             />
           )}
 

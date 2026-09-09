@@ -410,7 +410,7 @@ export const SettingsView: React.FC = () => {
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs">
             <p className="text-[#808080] max-w-xl">
-              Export full farm records, tree coordinates, transducer calibration logs, and notification outbox entries into a JSON dump, stamped with a SHA-256 integrity hash.
+              Export full farm records, tree coordinates, transducer calibration logs, and pest-detection notification history into a JSON dump, stamped with a SHA-256 integrity hash.
             </p>
 
             <button
