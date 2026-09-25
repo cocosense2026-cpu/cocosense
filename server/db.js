@@ -9,7 +9,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dirname = typeof __dirname !== 'undefined'
+  ? __dirname
+  : path.dirname(fileURLToPath(import.meta.url));
 
 // Local-first: if TURSO_DATABASE_URL isn't set (or is unset/blank), fall
 // back to a local SQLite file on disk via libSQL's embedded "file:" mode.
