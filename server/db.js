@@ -168,7 +168,6 @@ export const db = {
 // add it.
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 const [tablesSql, indexesSql] = schema.split('-- ==INDEXES==');
-await db.exec(tablesSql);
 
 // Defensive migration: CREATE TABLE IF NOT EXISTS above won't add new
 // columns to a farm_owners/notifications table created by an older
@@ -216,10 +215,26 @@ const migrations = [
   // entry.
   `ALTER TABLE master_nodes ADD COLUMN linked_at TEXT`,
 ];
-for (const sql of migrations) {
-  try { await db.exec(sql); } catch { /* column already exists -- fine */ }
+
+// No top-level `await` here on purpose: esbuild can't compile top-level
+// await to CommonJS, which is the format Netlify Functions (v1 handler
+// style, like this one) are always bundled to -- regardless of this
+// project's "type": "module" setting, which only affects the Vite/
+// frontend build. A top-level await here made esbuild fail during
+// Netlify's function bundling step, which made Netlify silently fall
+// back to shipping the raw, un-bundled source -- and THAT is what
+// caused the "Cannot use import statement outside a module" crash at
+// runtime. Wrapping init in this async function and exporting the
+// resulting promise as `ready` (awaited by server/index.js before any
+// request is handled) gets the exact same behavior without a literal
+// top-level `await` keyword.
+async function initDb() {
+  await db.exec(tablesSql);
+  for (const sql of migrations) {
+    try { await db.exec(sql); } catch { /* column already exists -- fine */ }
+  }
+  if (indexesSql) await db.exec(indexesSql);
+  console.log(`[db] Ready at ${url}`);
 }
 
-if (indexesSql) await db.exec(indexesSql);
-
-console.log(`[db] Ready at ${url}`);
+export const ready = initDb();

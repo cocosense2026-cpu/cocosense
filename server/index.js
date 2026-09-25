@@ -7,7 +7,7 @@ import express from 'express';
 // which, on Render, would take the entire backend offline until it
 // restarts, not just fail the one request that triggered it.
 import 'express-async-errors';
-import './db.js';
+import { ready as dbReady } from './db.js';
 import ingestRoutes from './routes/ingest.js';
 import apiRoutes from './routes/api.js';
 import ownerRoutes from './routes/owner.js';
@@ -26,6 +26,16 @@ const app = express();
 // runs ahead of every route, so a smaller per-route limit there would
 // never actually be reached.
 app.use(express.json({ limit: '50mb' }));
+
+// server/db.js's schema/migration setup now runs in an async function
+// instead of at the top of the module (see the comment in db.js for
+// why), so every request waits here for that to finish before reaching
+// any route. On a warm Netlify Function this promise is already
+// resolved and the await is instant; on a cold start it makes sure no
+// request hits a route before the schema/migrations have run.
+app.use((req, res, next) => {
+  dbReady.then(() => next(), next);
+});
 
 // Minimal CORS so the Vite dev server (a different port) can call this API
 // without adding an extra dependency. Tighten this before real deployment.
