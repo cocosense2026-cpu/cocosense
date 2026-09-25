@@ -11,6 +11,14 @@
   # listed explicitly or it won't ship with the deployed function and
   # every cold start will crash looking for it.
   included_files = ["server/schema.sql"]
+  # @libsql/client picks its native binary (e.g. @libsql/linux-x64-gnu)
+  # at runtime based on OS/architecture -- esbuild can't statically
+  # bundle that, so it silently leaves the native binary out of the zip,
+  # which crashes every cold start with "Cannot find module
+  # '@libsql/linux-x64-gnu'". Marking it external tells Netlify to copy
+  # the whole @libsql/client package (native binary included) into the
+  # function bundle instead of trying to inline it with esbuild.
+  external_node_modules = ["@libsql/client"]
 
 # IMPORTANT: this redirect must come before the catch-all "/*" one below
 # -- Netlify checks redirects top-to-bottom and uses the first match.
