@@ -160,6 +160,31 @@ export const db = {
   },
 };
 
+// Locate schema.sql across two different layouts:
+//  - Local/Render (`node server/index.js`): schema.sql sits right next
+//    to this file, so the dirname-relative path resolves directly.
+//  - Netlify Functions: esbuild bundles this file into
+//    netlify/functions/api.js, so `dirname` points at
+//    /var/task/netlify/functions -- NOT where schema.sql ends up.
+//    netlify.toml's `included_files = ["server/schema.sql"]` copies it
+//    into the deploy preserving its ORIGINAL repo-relative path, so it
+//    actually lands at /var/task/server/schema.sql. process.cwd() is
+//    /var/task in that environment, so joining it with 'server/schema.sql'
+//    matches where included_files actually put the file.
+function resolveSchemaPath() {
+  const candidates = [
+    path.join(dirname, 'schema.sql'),
+    path.join(process.cwd(), 'server', 'schema.sql'),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!found) {
+    throw new Error(
+      `schema.sql not found. Checked:\n${candidates.map((c) => `  - ${c}`).join('\n')}`
+    );
+  }
+  return found;
+}
+
 // schema.sql is split into a "tables" half and an "indexes" half by the
 // ==INDEXES== marker comment. We run tables -> migrations -> indexes, in
 // that order, because some indexes (e.g. on notifications.owner_id)
@@ -168,7 +193,7 @@ export const db = {
 // indexes together with the original CREATE TABLE statements would
 // fail with "no such column" before the migration ever got a chance to
 // add it.
-const schema = fs.readFileSync(path.join(dirname, 'schema.sql'), 'utf8');
+const schema = fs.readFileSync(resolveSchemaPath(), 'utf8');
 const [tablesSql, indexesSql] = schema.split('-- ==INDEXES==');
 
 // Defensive migration: CREATE TABLE IF NOT EXISTS above won't add new
