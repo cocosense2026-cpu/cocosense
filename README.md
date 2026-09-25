@@ -106,13 +106,14 @@ yourself to confirm an account during local testing.
 **Connecting the ESP32 device:** point the sketch's `serverURL` at
 `http://<YOUR_COMPUTER_IP>:4000/api/ingest-vibration` (LAN IP, not
 `localhost`). `apiKey` in the sketch must match `DEVICE_API_KEY` in
-`.env` (both default to `"Luna-1327"`).
+`.env` (there is no default anymore — you must set `DEVICE_API_KEY`
+yourself, e.g. `your-device-api-key`).
 
 The endpoint expects a JSON POST body shaped like:
 
 ```json
 {
-  "api_key": "Luna-1327",
+  "api_key": "your-device-api-key",
   "node_id": "MN-N1",
   "sector": "Sector 1",
   "grams": 3.4,
