@@ -19,7 +19,7 @@ const dirname = typeof __dirname !== 'undefined'
 // want when running on localhost. Set TURSO_DATABASE_URL (and
 // TURSO_AUTH_TOKEN) in server/.env if you'd rather point at a hosted
 // Turso database instead.
-const DEFAULT_LOCAL_DB_PATH = path.join(__dirname, 'data', 'cocosense.db');
+const DEFAULT_LOCAL_DB_PATH = path.join(dirname, 'data', 'cocosense.db');
 // Only meaningful for the local `file:` fallback below. On a serverless
 // host (Netlify Functions) the deployed function bundle's own directory
 // is read-only, so this would throw EROFS if TURSO_DATABASE_URL isn't
@@ -168,7 +168,7 @@ export const db = {
 // indexes together with the original CREATE TABLE statements would
 // fail with "no such column" before the migration ever got a chance to
 // add it.
-const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+const schema = fs.readFileSync(path.join(dirname, 'schema.sql'), 'utf8');
 const [tablesSql, indexesSql] = schema.split('-- ==INDEXES==');
 
 // Defensive migration: CREATE TABLE IF NOT EXISTS above won't add new
