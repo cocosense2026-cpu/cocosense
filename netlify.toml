@@ -1,0 +1,28 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+  # server/db.js reads this file from disk at startup (fs.readFileSync)
+  # to create the schema on first run. esbuild only bundles JS it can
+  # see through `import`, so a plain data file like this has to be
+  # listed explicitly or it won't ship with the deployed function and
+  # every cold start will crash looking for it.
+  included_files = ["server/schema.sql"]
+
+# IMPORTANT: this redirect must come before the catch-all "/*" one below
+# -- Netlify checks redirects top-to-bottom and uses the first match.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200
+  force = true
+
+# React Router client-side routing -- any other path falls back to
+# index.html so refreshing on e.g. /owner/dashboard doesn't 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
