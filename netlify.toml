@@ -16,7 +16,7 @@
 # -- Netlify checks redirects top-to-bottom and uses the first match.
 [[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
+  to = "/.netlify/functions/api/api/:splat"
   status = 200
   force = true
 
