@@ -12,7 +12,10 @@ import { sendMail } from '../mailer.js';
 
 const router = Router();
 
-const OWNER_PORTAL_URL = process.env.OWNER_PORTAL_URL || 'http://localhost:3000';
+// .replace(...) strips any trailing slash so appending "/owner/confirm"
+// below can't produce a double slash -- see server/routes/owner.js for
+// why that silently breaks the confirmation link's routing.
+const OWNER_PORTAL_URL = (process.env.OWNER_PORTAL_URL || 'http://localhost:3000').replace(/\/+$/, '');
 
 // Creates `count` master_nodes (+ 4 piezo_sensors each, one per analog
 // input the board actually has -- A0-A3) for an owner, continuing the

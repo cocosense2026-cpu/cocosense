@@ -24,7 +24,15 @@ const router = Router();
 // (admin-created owners) -- self-signup sends the owner through the
 // exact same /owner/confirm landing page, so both paths need the same
 // base URL.
-const OWNER_PORTAL_URL = process.env.OWNER_PORTAL_URL || 'http://localhost:3000';
+// .replace(...) strips any trailing slash the env var might have (e.g.
+// "https://site.netlify.app/" instead of "https://site.netlify.app").
+// Without this, appending "/owner/confirm?..." below produces a double
+// slash ("...app//owner/confirm"), which the client-side router treats
+// as an unrecognized path and silently falls back to whatever it
+// renders by default for the current session -- e.g. the admin
+// dashboard if an admin session happens to still be logged in -- so
+// the confirmation link looks like it's just "not working."
+const OWNER_PORTAL_URL = (process.env.OWNER_PORTAL_URL || 'http://localhost:3000').replace(/\/+$/, '');
 
 // Farm owner ids look like "FO-2026-003" everywhere else in the app
 // (see src/App.tsx's handleAddOwner for the admin-created path). A
