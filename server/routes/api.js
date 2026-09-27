@@ -298,16 +298,17 @@ router.post('/owners', async (req, res) => {
   // notifications are pest-detection-only now (see server/routes/ingest.js,
   // the sole remaining source of notification rows).
 
-  // Respond to the admin as soon as the account itself exists --
-  // everything the "Register & Dispatch Email" button actually needs
-  // to stop spinning is done. The email send is fire-and-forget from
-  // here: it can still take several seconds (or fail/timeout) without
-  // ever making the Add Owner modal look "stuck". sendMail() already
-  // catches its own errors and always logs to outbox_emails internally,
-  // so there's nothing to await or re-throw here.
-  res.status(201).json({ ok: true, id: b.id, emailPending: true });
-
-  sendMail({
+  // IMPORTANT: this used to respond first and send the email
+  // fire-and-forget afterward. That's fine on a normal long-running
+  // Node server, but Netlify Functions run on AWS Lambda under the
+  // hood, which can freeze/kill the execution environment the instant
+  // res.status(...).json(...) sends its response -- cutting off the
+  // Gmail SMTP handshake inside sendMail() before it finishes. That's
+  // why this worked on localhost but silently sent nothing once
+  // deployed (same issue fixed in server/routes/owner.js's QR sign-up
+  // path). Now we await the send before responding, so the function
+  // can't freeze until the email has actually been handed off to Gmail.
+  await sendMail({
     toName: b.name,
     toEmail: b.email,
     subject: 'Welcome to CocoSense — Confirm Your Account',
@@ -315,11 +316,13 @@ router.post('/owners', async (req, res) => {
     body: confirmationEmailBody({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
     html: confirmationEmailHtml({ name: b.name, id: b.id, email: b.email, token: confirmToken }),
   }).catch((err) => {
-    // Belt-and-suspenders: sendMail already swallows its own errors
-    // internally, but if something upstream of that throws (e.g. the
-    // outbox INSERT itself), don't let it become an unhandled rejection.
-    console.error('[owners] background confirmation email failed:', err);
+    // sendMail already catches its own errors and logs to outbox_emails
+    // internally -- this is belt-and-suspenders in case something
+    // upstream of that throws (e.g. the outbox INSERT itself).
+    console.error('[owners] confirmation email failed:', err);
   });
+
+  res.status(201).json({ ok: true, id: b.id, emailPending: true });
 });
 
 // Note: owner login/change-password used to live here too, before the

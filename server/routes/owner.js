@@ -239,22 +239,32 @@ router.post('/owner/auth/signup', async (req, res) => {
     }
   }
 
-  // Same fire-and-forget shape as the admin-created path in
-  // server/routes/api.js -- respond as soon as the account exists,
-  // don't make the signup form hang on the email send.
-  res.status(201).json({ ok: true, id, email, linkedNodeId });
-
+  // IMPORTANT: this used to be fire-and-forget (respond first, send the
+  // email after, no await) -- that's fine on a normal long-running
+  // Node server, but Netlify Functions run on AWS Lambda under the
+  // hood, which can freeze/kill the execution environment the instant
+  // res.status(...).json(...) sends its response. Any code still
+  // in-flight after that point -- including the Gmail SMTP handshake
+  // inside sendMail() -- can get cut off before it finishes, so the
+  // email silently never goes out. This is exactly why it worked on
+  // localhost (Node just keeps running) but not once deployed. Now we
+  // await the send BEFORE responding, so the function isn't allowed to
+  // freeze until the email has actually been handed off to Gmail.
   const { body, html } = signupConfirmationEmail({ name, token: confirmToken });
-  sendMail({
-    toName: name,
-    toEmail: email,
-    subject: 'Welcome to CocoSense — Confirm Your Account',
-    category: 'credentials',
-    body,
-    html,
-  }).catch((err) => {
-    console.error('[owner signup] background confirmation email failed:', err);
-  });
+  try {
+    await sendMail({
+      toName: name,
+      toEmail: email,
+      subject: 'Welcome to CocoSense — Confirm Your Account',
+      category: 'credentials',
+      body,
+      html,
+    });
+  } catch (err) {
+    console.error('[owner signup] confirmation email failed:', err);
+  }
+
+  res.status(201).json({ ok: true, id, email, linkedNodeId });
 });
 
 router.post('/owner/auth/login', async (req, res) => {
