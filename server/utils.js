@@ -28,6 +28,26 @@ export function piezoSensorId(nodeId, pin) {
   return `${nodeId}-${pin}`;
 }
 
+// Accepts whatever the gateway relays for the sensor -- "A1", "a1", "1",
+// "P2", 1 -- and maps it onto the fixed A0-A3 pin names. Returns null if
+// it can't be recognised so the caller can log it instead of silently
+// filing the reading under A0 (Piezo 1).
+export function normalizePin(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim().toUpperCase();
+  if (PIEZO_PINS.includes(s)) return s;
+  // bare index "0".."3" -> A0..A3
+  if (/^[0-3]$/.test(s)) return PIEZO_PINS[Number(s)];
+  return null;
+}
+
+// Some gateway firmware puts the pin into node_id ("MN-STOCK-0001-A1")
+// instead of sending it in `pin`. Split it back apart.
+export function splitNodeAndPin(nodeId) {
+  const m = String(nodeId).match(/^(.*?)-(A[0-3])$/i);
+  return m ? { nodeId: m[1], pin: m[2].toUpperCase() } : { nodeId: String(nodeId), pin: null };
+}
+
 export function piezoLabel(pin) {
   const num = PIEZO_PINS.indexOf(pin) + 1;
   return `Piezo ${num > 0 ? num : '?'} (${pin})`;

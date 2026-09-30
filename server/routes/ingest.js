@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { severityForGrams, piezoSensorId } from '../utils.js';
+import { severityForGrams, piezoSensorId, normalizePin, splitNodeAndPin } from '../utils.js';
 import { restampRowHash } from '../hash.js';
 import { notifyOwner } from '../notify.js';
 
@@ -63,9 +63,11 @@ async function recentlyAlerted(nodeId, alertType, cooldownMs) {
 // and `rssi` are optional -- omit them and the node's existing values
 // are left untouched.
 router.post('/ingest-vibration', async (req, res) => {
+  // TEMP DIAGNOSTIC: shows exactly what the gateway sends (Netlify function logs).
+  console.log('[ingest] raw body', JSON.stringify({ ...(req.body || {}), api_key: undefined }));
   const {
     api_key,
-    node_id,
+    node_id: rawNodeId,
     piezo_id,
     // The LoRa gateway relays the mesh node's raw packet field name
     // as-is: `pin` (e.g. "A0" / "A1"), not the full `piezo_id` string
@@ -73,7 +75,7 @@ router.post('/ingest-vibration', async (req, res) => {
     // Without this, every reading silently fell back to that node's A0
     // sensor regardless of which physical piezo it actually came from
     // -- see piezoSensorIdValue below.
-    pin,
+    pin: rawPin,
     sector,
     grams,
     battery,
@@ -82,6 +84,10 @@ router.post('/ingest-vibration', async (req, res) => {
     pest_clicks,
     pest_band_ratio,
   } = req.body || {};
+
+  const split = rawNodeId ? splitNodeAndPin(rawNodeId) : { nodeId: rawNodeId, pin: null };
+  const node_id = split.nodeId;
+  const pin = rawPin ?? split.pin;
 
   const expectedKey = process.env.DEVICE_API_KEY;
   if (!expectedKey) {
@@ -114,7 +120,11 @@ router.post('/ingest-vibration', async (req, res) => {
   // specific Vibration Events panel instead of being orphaned, while
   // multi-sensor firmware can report each transducer separately by
   // passing its real piezo_id (e.g. "MN-N1-A2").
-  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, pin || 'A0');
+  const normalizedPin = normalizePin(pin);
+  if (!piezo_id && normalizedPin == null) {
+    console.warn('[ingest] unrecognised/missing pin', JSON.stringify(pin), 'from', node_id, '-> defaulting to A0');
+  }
+  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, normalizedPin || 'A0');
 
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
