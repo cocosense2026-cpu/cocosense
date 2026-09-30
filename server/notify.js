@@ -10,7 +10,6 @@ import { db } from './db.js';
 import { toCamel } from './utils.js';
 import { restampRowHash } from './hash.js';
 import { sendMail } from './mailer.js';
-import { sendSms } from './sms.js';
 
 async function getOwnerSettings(ownerId) {
   let row = await db.prepare(`SELECT * FROM owner_settings WHERE owner_id = ?`).get(ownerId);
@@ -88,14 +87,10 @@ export async function notifyOwner(ownerId, { title, message, icon = 'bell', cate
     });
   }
 
-  if (settings.notifySms) {
-    await sendSms({
-      toName: owner.name,
-      toPhone: owner.phone,
-      message: `CocoSense Alert - ${title}: ${message}`,
-      category,
-    });
-  }
+  // SMS notifications were removed as a channel (no paid SMS gateway in
+  // use) -- notify_sms is intentionally never read here. The column
+  // stays in the schema/settings payload for backward compatibility,
+  // it's just inert.
 
   return { buzzer };
 }

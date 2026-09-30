@@ -67,6 +67,13 @@ router.post('/ingest-vibration', async (req, res) => {
     api_key,
     node_id,
     piezo_id,
+    // The LoRa gateway relays the mesh node's raw packet field name
+    // as-is: `pin` (e.g. "A0" / "A1"), not the full `piezo_id` string
+    // this endpoint originally expected (e.g. "MN-STOCK-0001-A1").
+    // Without this, every reading silently fell back to that node's A0
+    // sensor regardless of which physical piezo it actually came from
+    // -- see piezoSensorIdValue below.
+    pin,
     sector,
     grams,
     battery,
@@ -107,7 +114,7 @@ router.post('/ingest-vibration', async (req, res) => {
   // specific Vibration Events panel instead of being orphaned, while
   // multi-sensor firmware can report each transducer separately by
   // passing its real piezo_id (e.g. "MN-N1-A2").
-  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, 'A0');
+  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, pin || 'A0');
 
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.

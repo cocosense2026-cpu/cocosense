@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sun, Moon, Mail, Smartphone, Bell, Activity, ShieldCheck, Pencil, Lock, LogOut, ShieldAlert } from 'lucide-react';
+import { Sun, Moon, Mail, Bell, Activity, ShieldCheck, Pencil, Lock, LogOut, ShieldAlert } from 'lucide-react';
 import { ownerApi } from '../api';
 import { useOwnerAuth } from '../context/OwnerAuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -19,7 +19,6 @@ interface OwnerSettings {
 
 const TOGGLES: Array<{ key: keyof OwnerSettings; icon: React.ComponentType<any>; label: string; desc: string; danger?: boolean }> = [
   { key: 'notifyEmail', icon: Mail, label: 'Email Notifications', desc: 'Receive alert and report summaries by email.' },
-  { key: 'notifySms', icon: Smartphone, label: 'SMS Notifications', desc: 'Get critical alerts via text message.' },
   { key: 'notifyPush', icon: Bell, label: 'Push Notifications', desc: 'In-app and browser push notifications.' },
   { key: 'localBuzzerAlert', icon: Activity, label: 'Local Buzzer Alert', desc: 'Sound the on-site buzzer for critical events.' },
   {
