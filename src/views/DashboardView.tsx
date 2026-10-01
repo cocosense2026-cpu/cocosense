@@ -4,7 +4,6 @@ import { FarmOwnersMap } from '../components/FarmOwnersMap';
 import { BrandLogo } from '../components/BrandLogo';
 import { PestVisualizer } from '../components/PestVisualizer';
 import { 
-  ShieldCheck, 
   Activity, 
   AlertTriangle, 
   ArrowUpRight, 
@@ -48,9 +47,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [owners, selectedSector]
   );
 
-  const totalTrees = 12450;
   const criticalAlerts = alerts.filter(a => a.severity === 'CRITICAL' && !a.reviewed);
-  const activeInfestedTrees = trees.filter(t => t.status === 'Active Infestation').length;
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -74,7 +71,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Plantation Telemetry &amp; Bioacoustics
               </h1>
               <p className="text-xs sm:text-sm text-[#A0A0A0] leading-relaxed font-light">
-                Continuous bioacoustic monitoring of an estimated 12,450 coconut palms. Piezoelectric acoustic sensors detect internal wood-boring vibrations (Rhinoceros Beetle &amp; Red Palm Weevil) up to 21 days before visual canopy wilting occurs.
+                Continuous bioacoustic monitoring of coconut palms. Piezoelectric acoustic sensors detect internal wood-boring vibrations (Rhinoceros Beetle &amp; Red Palm Weevil) up to 21 days before visual canopy wilting occurs.
               </p>
             </div>
           </div>
@@ -122,29 +119,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Primary KPI Telemetry Stat Cards Grid with Coconut & Beetle Motifs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-        {/* Total Monitored Trees */}
-        <div 
-          onClick={() => onNavigate('trees')}
-          className="rounded-xl bg-[#141414] border border-[#262626] p-5 shadow-lg hover:border-[#16A34A]/60 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-widest text-[#808080]">Total Monitored Palms</span>
-            <div className="p-2.5 rounded-lg bg-[#1A1A1A] text-[#16A34A] border border-[#262626]">
-              {/* Coconut Palm Icon */}
-              <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
-                <path d="M12 2C11 5 8 7 5 7C7 9 10 9 11 11C11 15 11 18 10 22H14C13 18 13 15 13 11C14 9 17 9 19 7C16 7 13 5 12 2Z" />
-              </svg>
-            </div>
-          </div>
-          <div className="mt-3 font-mono text-2xl sm:text-3xl font-black text-white tracking-tight">
-            {totalTrees.toLocaleString()}
-          </div>
-          <div className="mt-2 flex items-center justify-between text-xs text-[#808080]">
-            <span>+150 added this month</span>
-            <ArrowUpRight className="w-3.5 h-3.5 text-[#16A34A]" />
-          </div>
-        </div>
-
         {/* Active Pest Alerts (Rhinoceros Beetle / Weevil) */}
         <div 
           onClick={() => onNavigate('alerts')}
@@ -173,27 +147,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <ArrowUpRight className="w-3.5 h-3.5 text-[#F44336]" />
           </div>
         </div>
-
-        {/* Flagged Infected Trees */}
-        <div 
-          onClick={() => onNavigate('trees')}
-          className="rounded-xl bg-[#141414] border border-[#262626] p-5 shadow-lg hover:border-[#16A34A]/60 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-widest text-[#808080]">Protected Palms</span>
-            <div className="p-2.5 rounded-lg bg-[#1A1A1A] text-[#16A34A] border border-[#262626]">
-              <ShieldCheck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3 font-mono text-2xl sm:text-3xl font-black text-white tracking-tight">
-            {(totalTrees - activeInfestedTrees).toLocaleString()}
-          </div>
-          <div className="mt-2 flex items-center justify-between text-xs text-[#808080]">
-            <span>99.8% Healthy Canopy</span>
-            <ArrowUpRight className="w-3.5 h-3.5 text-[#16A34A]" />
-          </div>
-        </div>
-
       </div>
 
       {/* Main Split: Farm Owner Location Map (Left) & Real-time Vibration Telemetry Stream (Right) */}
@@ -251,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="rounded-xl bg-[#141414] border border-[#262626] p-5 shadow-xl space-y-3">
-            <div className="space-y-2.5">
+            <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1 overscroll-contain">
               {vibrationEvents.map(evt => {
                 const isCrit = evt.severity === 'Critical';
                 const isWarn = evt.severity === 'Warning';
