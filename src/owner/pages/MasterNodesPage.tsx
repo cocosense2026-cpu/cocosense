@@ -1,15 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Radio,
-  Battery,
   Wifi,
   Eye,
   X,
   CheckCircle2,
   AlertTriangle,
   Activity,
-  Cpu,
-  Hash,
   Clock,
   Sparkles,
   QrCode,
@@ -129,10 +126,7 @@ export const MasterNodesPage: React.FC = () => {
               }`}
             >
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="font-mono text-xs font-bold text-[#D4AF37] uppercase tracking-wider">
-                    {node.sector}
-                  </span>
+                <div className="flex items-center justify-end mb-3">
                   <span
                     className={`px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
                       node.online
@@ -149,38 +143,6 @@ export const MasterNodesPage: React.FC = () => {
 
                 <div className="mt-4 space-y-2.5">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-[#808080] flex items-center gap-1.5">
-                      <Battery
-                        className={`w-4 h-4 ${
-                          node.batteryPercent == null
-                            ? 'text-[#808080]'
-                            : node.batteryPercent > 25
-                            ? 'text-[#D4AF37]'
-                            : 'text-[#F44336]'
-                        }`}
-                      />
-                      <span>Battery Level</span>
-                    </span>
-                    <span className="font-mono font-bold text-white">
-                      {node.batteryPercent == null ? '—' : `${node.batteryPercent}%`}
-                    </span>
-                  </div>
-                  <div className="h-1.5 w-full rounded bg-[#0A0A0A] overflow-hidden border border-[#262626]">
-                    <div
-                      className={`h-full transition-all duration-500 ${
-                        node.batteryPercent == null
-                          ? 'bg-[#333333]'
-                          : node.batteryPercent > 50
-                          ? 'bg-[#D4AF37]'
-                          : node.batteryPercent > 20
-                          ? 'bg-[#D4AF37]/60'
-                          : 'bg-[#F44336]'
-                      }`}
-                      style={{ width: `${node.batteryPercent ?? 0}%` }}
-                    ></div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs pt-1">
                     <span className="text-[#808080] flex items-center gap-1.5">
                       <Wifi className="w-4 h-4 text-[#D4AF37]" />
                       <span>Signal RSSI</span>
@@ -286,21 +248,13 @@ export const MasterNodesPage: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-5">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
                   <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
                     <Activity className="w-3 h-3" /> Status
                   </p>
                   <p className={`text-sm font-mono font-bold ${viewedNode.online ? 'text-[#4CAF50]' : 'text-[#F44336]'}`}>
                     {viewedNode.online ? 'ONLINE' : 'OFFLINE'}
-                  </p>
-                </div>
-                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
-                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
-                    <Battery className="w-3 h-3" /> Battery
-                  </p>
-                  <p className="text-sm font-mono font-bold text-white">
-                    {viewedNode.batteryPercent == null ? '—' : `${viewedNode.batteryPercent}%`}
                   </p>
                 </div>
                 <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
@@ -314,18 +268,6 @@ export const MasterNodesPage: React.FC = () => {
                     <Clock className="w-3 h-3" /> Last Ping
                   </p>
                   <p className="text-sm font-mono font-bold text-white truncate">{viewedNode.lastPing ?? 'Never connected'}</p>
-                </div>
-                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
-                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
-                    <Cpu className="w-3 h-3" /> Firmware
-                  </p>
-                  <p className="text-sm font-mono font-bold text-white truncate">{viewedNode.firmwareVersion}</p>
-                </div>
-                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
-                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
-                    <Hash className="w-3 h-3" /> Sector
-                  </p>
-                  <p className="text-sm font-mono font-bold text-white truncate">{viewedNode.sector}</p>
                 </div>
               </div>
 

@@ -52,6 +52,10 @@ export const DashboardPage: React.FC = () => {
   }, []);
   usePolling(refresh, 10000);
 
+  // LoRa Mesh mirrors the Master Node Mesh page: Online when at least one
+  // of the owner's master nodes is online, otherwise Offline.
+  const meshOnline = !!data && data.nodesOnline > 0;
+
   const firstName = (owner?.firstName || owner?.name || 'Farm Owner').split(' ')[0];
 
   const vibePct = data ? Math.min(100, (data.vibration.grams / VIBE_MAX_GRAMS) * 100) : 0;
@@ -144,26 +148,8 @@ export const DashboardPage: React.FC = () => {
                 <Wifi className="w-3.5 h-3.5" />
               </span>
             </div>
-            <div className="text-xl font-bold text-white mt-2">
-              {data && data.nodesTotal > 0 && data.nodesOnline === data.nodesTotal ? 'Strong' : 'Degraded'}
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded bg-[#0E0E0E] border border-[#262626] p-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-bold text-white">
-            <span className="text-[#808080] uppercase tracking-wider text-[10px]">Tree Health</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="text-center">
-              <div className="text-lg font-bold text-white">{data?.totalTrees ?? '—'}</div>
-              <div className="text-[10px] text-[#808080] uppercase">Total</div>
-            </div>
-            <div className="text-center">
-              <div className="text-lg font-bold text-[#4CAF50] flex items-center gap-1">
-                {data?.healthyTrees ?? '—'} <CheckCircle className="w-3.5 h-3.5" />
-              </div>
-              <div className="text-[10px] text-[#808080] uppercase">Healthy</div>
+            <div className={`text-xl font-bold mt-2 ${meshOnline ? 'text-[#4CAF50]' : 'text-[#F44336]'}`}>
+              {data ? (meshOnline ? 'Online' : 'Offline') : '—'}
             </div>
           </div>
         </div>
