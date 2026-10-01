@@ -161,7 +161,7 @@ export const PiezoDetailPage: React.FC = () => {
                 return (
                   <div className="space-y-3">
                     <div className="rounded-lg bg-[#0E0E0E] border border-[#262626]">
-                      <VibrationStrengthChart points={chartPoints} height={280} width={900} xAxisLabel="Time" />
+                      <VibrationStrengthChart points={chartPoints} height={280} xAxisLabel="Time" scrollable />
                     </div>
                     {!data.enabled ? (
                       <div className="flex items-center justify-center gap-1.5 text-[11px] text-[#808080]">

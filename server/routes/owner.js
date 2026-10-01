@@ -694,7 +694,15 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const recentStmt = db.prepare(
     `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY ${orderBy} LIMIT ?`
   );
+  // Chart window: every reading from the last 7 days (capped so a very
+  // chatty sensor can't bloat the response). Falls back to the latest 8
+  // readings when nothing landed this week so the chart is never blank
+  // for a sensor that has older history.
+  const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
   const sparklineStmt = db.prepare(
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.timestamp >= ? ORDER BY v.timestamp DESC LIMIT 500`
+  );
+  const sparklineFallbackStmt = db.prepare(
     `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY v.timestamp DESC LIMIT 8`
   );
 
@@ -717,7 +725,12 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
       const pin = sensor.id.split('-').pop(); // e.g. "MN-COCO-0001-001-A2" -> "A2"
       const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
       const rows = enabled ? toCamel(await recentStmt.all(sensor.id, limit)) : [];
-      const sparkline = enabled ? toCamel(await sparklineStmt.all(sensor.id)).reverse() : [];
+      let sparkline = [];
+      if (enabled) {
+        let weekRows = toCamel(await sparklineStmt.all(sensor.id, weekCutoff));
+        if (weekRows.length === 0) weekRows = toCamel(await sparklineFallbackStmt.all(sensor.id));
+        sparkline = weekRows.reverse(); // oldest -> newest
+      }
       const latest = rows[0] ?? null;
 
       // Label is just "Piezo N" -- each master node always carries the
@@ -822,13 +835,25 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
           .all(sensor.id, RECENT_LIMIT)
       )
     : [];
-  const sparkline = enabled
-    ? toCamel(
+  // Last 7 days of readings for the scrollable chart (latest 20 if the
+  // week is empty so older history still draws).
+  let sparkline = [];
+  if (enabled) {
+    const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    let weekRows = toCamel(
+      await db
+        .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 500`)
+        .all(sensor.id, weekCutoff)
+    );
+    if (weekRows.length === 0) {
+      weekRows = toCamel(
         await db
           .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT 20`)
           .all(sensor.id)
-      ).reverse()
-    : [];
+      );
+    }
+    sparkline = weekRows.reverse();
+  }
   const latest = logs[0] ?? null;
 
   res.json({

@@ -235,7 +235,7 @@ export const EventsPage: React.FC = () => {
                   </div>
                 ) : (
                   <div className="rounded-lg bg-[#0E0E0E] border border-[#262626]">
-                    <VibrationStrengthChart points={panelBars} height={150} />
+                    <VibrationStrengthChart points={panelBars} height={150} scrollable />
                   </div>
                 )}
 

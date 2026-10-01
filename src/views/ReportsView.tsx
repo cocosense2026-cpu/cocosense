@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { usePasswordProtectedExport } from '../hooks/usePasswordProtectedExport';
+import { VibrationStrengthChart } from '../components/VibrationStrengthChart';
 import { PasswordPromptModal } from '../components/PasswordPromptModal';
 import { DecryptedPreviewModal } from '../components/DecryptedPreviewModal';
 import { FarmOwner, MasterNode, MonitoredTree, PestAlert, VibrationEvent } from '../types';
@@ -8,6 +9,7 @@ import {
   Download,
   Upload,
   TrendingUp,
+  Activity,
   Radio,
   CheckCircle2,
 } from 'lucide-react';
@@ -29,10 +31,6 @@ function parseServerTimestamp(raw?: string | null): Date | null {
   const iso = raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`;
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function monthKey(d: Date): string {
-  return `${d.getFullYear()}-${d.getMonth()}`;
 }
 
 // Every alert row (both `alert_type = 'pest'` and the tamper/hard-knock
@@ -75,35 +73,25 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ owners, nodes, trees, 
   const totalSensors = nodes.reduce((sum, n) => sum + (n.totalSensors || 0), 0);
   const activeInfestations = trees.filter((t) => t.status === 'Active Infestation').length;
 
-  // Last 6 calendar months ending this month, each with its real
-  // pest-alert count and real raw-reading (device activity) count for
-  // that month -- built from the actual timestamps on the rows the
-  // backend returned, not a hardcoded array of numbers.
-  const monthly = useMemo(() => {
-    const buckets: { key: string; label: string; pestAlerts: number; readings: number }[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      buckets.push({ key: monthKey(d), label: d.toLocaleString('en-US', { month: 'short' }), pestAlerts: 0, readings: 0 });
-    }
-    const byKey = new Map(buckets.map((b) => [b.key, b]));
-
-    for (const a of pestAlerts) {
-      const d = parseServerTimestamp(a.createdAt || a.timestamp);
-      if (!d) continue;
-      const bucket = byKey.get(monthKey(d));
-      if (bucket) bucket.pestAlerts++;
-    }
-    for (const v of vibrationEvents) {
-      const d = parseServerTimestamp(v.timestamp);
-      if (!d) continue;
-      const bucket = byKey.get(monthKey(d));
-      if (bucket) bucket.readings++;
-    }
-    return buckets;
-  }, [pestAlerts, vibrationEvents]);
-
-  const maxValue = Math.max(1, ...monthly.map((m) => Math.max(m.pestAlerts, m.readings)));
+  // Seismograph trace: every vibration reading from the last 7 days,
+  // oldest -> newest (the chart itself puts the latest at the left and
+  // scrolls back through the week). If nothing landed this week it
+  // falls back to the latest 40 readings so older history still draws.
+  const seismoPoints = useMemo(() => {
+    const rows = vibrationEvents
+      .map((v) => ({ v, d: parseServerTimestamp(v.timestamp) }))
+      .filter((r): r is { v: VibrationEvent; d: Date } => r.d !== null)
+      .sort((a, b) => a.d.getTime() - b.d.getTime());
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let recent = rows.filter((r) => r.d.getTime() >= weekAgo);
+    if (recent.length === 0) recent = rows.slice(-40);
+    return recent.slice(-500).map(({ v }) => ({
+      grams: v.grams,
+      timestamp: v.timestamp,
+      // Admin rows use "Warning"; the shared chart palette calls it "Elevated".
+      severity: v.severity === 'Warning' ? 'Elevated' : v.severity,
+    }));
+  }, [vibrationEvents]);
 
   const exportFullReport = async () => {
     const sectorMap = new Map<string, { trees: number; active: number; warning: number }>();
@@ -188,61 +176,50 @@ ${findingsLines}
         </div>
       </div>
 
-      {/* Monthly Pest Pressure Chart -- driven by real alerts + vibration_events rows */}
+      {/* Bioacoustic seismograph -- same vibration-strength trace the farm
+          owner sees, driven by real vibration_events rows */}
       <div className="rounded bg-[#141414] border border-[#262626] p-6 md:p-8 shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <h3 className="font-bold text-sm sm:text-base text-white uppercase serif flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-[#D4AF37]" />
-              6-Month Pest Pressure &amp; Device Activity
+              <Activity className="w-5 h-5 text-[#D4AF37]" />
+              Bioacoustic Seismograph
             </h3>
-            <p className="text-xs text-[#808080]">Pest alerts vs. total sensor readings logged, by month</p>
+            <p className="text-xs text-[#808080]">Vibration strength (g) across all sensors &middot; last 7 days</p>
           </div>
           {reviewRate != null && (
             <span className="font-mono text-xs text-[#D4AF37] font-bold">{reviewRate}% of pest alerts reviewed</span>
           )}
         </div>
 
-        {!hasTelemetry ? (
+        {!hasTelemetry || seismoPoints.length === 0 ? (
           <div className="h-48 flex flex-col items-center justify-center gap-2 bg-[#0A0A0A] rounded border border-[#262626] text-center px-6">
             <Radio className="w-6 h-6 text-[#404040]" />
             <p className="text-xs text-[#808080]">
               No device telemetry recorded yet.{' '}
               {nodes.length > 0
-                ? `${nodesOnline} of ${nodes.length} master node(s) provisioned -- once they report readings, trends appear here automatically.`
+                ? `${nodesOnline} of ${nodes.length} master node(s) provisioned -- once they report readings, the seismograph appears here automatically.`
                 : 'Add a master node to start receiving readings.'}
             </p>
           </div>
         ) : (
           <>
-            <div className="h-48 flex items-end justify-between gap-3 pt-6 pb-2 px-4 bg-[#0A0A0A] rounded border border-[#262626]">
-              {monthly.map((m) => (
-                <div key={m.key} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-                  <div className="w-full flex items-end justify-center gap-1.5 h-full">
-                    <div
-                      className="w-1/2 bg-[#F44336]/80 rounded-t transition-all hover:bg-[#F44336]"
-                      style={{ height: `${(m.pestAlerts / maxValue) * 100}%` }}
-                      title={`${m.label} Pest Alerts: ${m.pestAlerts}`}
-                    ></div>
-                    <div
-                      className="w-1/2 bg-[#D4AF37]/80 rounded-t transition-all hover:bg-[#D4AF37]"
-                      style={{ height: `${(m.readings / maxValue) * 100}%` }}
-                      title={`${m.label} Sensor Readings: ${m.readings}`}
-                    ></div>
-                  </div>
-                  <span className="font-mono text-xs text-[#808080] font-semibold">{m.label}</span>
-                </div>
-              ))}
+            <div className="rounded-lg bg-[#0E0E0E] border border-[#262626] p-2">
+              <VibrationStrengthChart points={seismoPoints} height={220} xAxisLabel="Time" scrollable />
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-6 pt-2 text-xs">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#F44336]"></span>
-                <span className="text-[#808080]">Pest Alerts Detected</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-[#4CAF50]"></span>
+                <span className="text-[#808080]">Normal</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#D4AF37]"></span>
-                <span className="text-[#808080]">Sensor Readings Logged</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-[#E9A23B]"></span>
+                <span className="text-[#808080]">Elevated</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#F44336]"></span>
+                <span className="text-[#808080]">Critical</span>
               </div>
             </div>
           </>

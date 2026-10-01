@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Bug, Radio, UserCog, UserPlus, Globe2, History, CheckCircle2, Radar } from 'lucide-react';
+import { Users, Radio, UserCog, UserPlus, Globe2, History, CheckCircle2, Radar } from 'lucide-react';
 import { superAdminApi, OverviewTotals, OwnerRollup, AdminAccount, ActivityEntry } from '../api';
 import { useSuperAdminAuth } from '../context/SuperAdminAuthContext';
 import { StatTile } from '../components/StatTile';
@@ -59,20 +59,13 @@ export const SuperAdminDashboardPage: React.FC = () => {
         <div className="rounded-xl bg-[#2B1B1B] border border-[#F44336]/40 p-4 text-xs text-[#F44336]">{error}</div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-5">
         <StatTile
           label="Farm Owners"
           value={loading ? '—' : totals?.totalOwners ?? 0}
           hint={loading ? undefined : `${(totals?.totalTrees ?? 0).toLocaleString()} trees monitored`}
           icon={<Users className="w-4 h-4" />}
           accent="gold"
-        />
-        <StatTile
-          label="Flagged Infected Trees"
-          value={loading ? '—' : totals?.totalInfectedTrees ?? 0}
-          hint={loading ? undefined : (totals?.totalInfectedTrees ?? 0) > 0 ? 'Needs attention' : 'All clear'}
-          icon={<Bug className="w-4 h-4" />}
-          accent={(totals?.totalInfectedTrees ?? 0) > 0 ? 'red' : 'green'}
         />
         <StatTile
           label="Master Nodes"
@@ -110,7 +103,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="space-y-0">
+            <div className="space-y-0 max-h-[360px] overflow-y-auto pr-1 overscroll-contain">
               {activity.map((ev) => (
                 <div key={ev.id} className="flex items-start gap-3 py-2.5 border-b border-[#262626] last:border-0">
                   <span className="w-7 h-7 rounded-lg bg-[#1A1A1A] border border-[#262626] flex items-center justify-center flex-shrink-0">

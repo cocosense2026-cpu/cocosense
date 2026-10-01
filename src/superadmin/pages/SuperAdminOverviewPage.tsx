@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Globe2, TreeDeciduous, Bug, Radio, MapPinned } from 'lucide-react';
+import { Globe2, Radio, MapPinned } from 'lucide-react';
 import { superAdminApi, OverviewTotals, OwnerRollup, SuperAdminApiError } from '../api';
 import { StatTile } from '../components/StatTile';
 import { Avatar } from '../../components/Avatar';
@@ -44,24 +44,12 @@ export const SuperAdminOverviewPage: React.FC = () => {
 
       {error && <div className="rounded-xl bg-[#2B1B1B] border border-[#F44336]/40 p-4 text-xs text-[#F44336]">{error}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
         <StatTile
           label="Farm Owners"
           value={loading ? '—' : totals?.totalOwners ?? 0}
           icon={<Globe2 className="w-4 h-4" />}
           accent="gold"
-        />
-        <StatTile
-          label="Monitored Trees"
-          value={loading ? '—' : (totals?.totalTrees ?? 0).toLocaleString()}
-          icon={<TreeDeciduous className="w-4 h-4" />}
-          accent="green"
-        />
-        <StatTile
-          label="Infected Trees"
-          value={loading ? '—' : totals?.totalInfectedTrees ?? 0}
-          icon={<Bug className="w-4 h-4" />}
-          accent={(totals?.totalInfectedTrees ?? 0) > 0 ? 'red' : 'green'}
         />
         <StatTile
           label="Master Nodes"

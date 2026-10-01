@@ -1,4 +1,4 @@
-import React, { useId, useMemo } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 export interface VibrationStrengthPoint {
   grams: number;
@@ -53,6 +53,10 @@ interface VibrationStrengthChartProps {
    * used on the full-detail piezo view to match the reference monitor layout. */
   xAxisLabel?: string;
   className?: string;
+  /** Week mode: the plot becomes a horizontally scrollable strip with a
+   * fixed y-axis. Newest reading sits at the left edge; scrolling right
+   * moves back in time through the points (up to the last 7 days). */
+  scrollable?: boolean;
 }
 
 /**
@@ -67,7 +71,11 @@ export const VibrationStrengthChart: React.FC<VibrationStrengthChartProps> = ({
   width = 460,
   xAxisLabel,
   className = '',
+  scrollable = false,
 }) => {
+  if (scrollable) {
+    return <ScrollableStrengthChart points={points} height={height} xAxisLabel={xAxisLabel} className={className} />;
+  }
   const rawId = useId();
   const gradId = `vsc-grad-${rawId.replace(/[:]/g, '')}`;
   const fillId = `vsc-fill-${rawId.replace(/[:]/g, '')}`;
@@ -192,6 +200,132 @@ export const VibrationStrengthChart: React.FC<VibrationStrengthChartProps> = ({
           </text>
         )}
       </svg>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------
+// Scrollable week view.
+// ---------------------------------------------------------------------
+
+function parseTs(timestamp?: string): Date | null {
+  if (!timestamp) return null;
+  const d = new Date(timestamp.includes('T') ? timestamp : `${timestamp.replace(' ', 'T')}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDayTime(timestamp?: string): string {
+  const d = parseTs(timestamp);
+  if (!d) return '';
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })}`;
+}
+
+const PX_PER_POINT = 16; // horizontal room given to each reading
+const AXIS_W = 34; // fixed y-axis gutter
+
+const ScrollableStrengthChart: React.FC<{
+  points: VibrationStrengthPoint[];
+  height: number;
+  xAxisLabel?: string;
+  className?: string;
+}> = ({ points, height, xAxisLabel, className = '' }) => {
+  const rawId = useId().replace(/[:]/g, '');
+  const gradId = `vsc-sg-${rawId}`;
+  const fillId = `vsc-sf-${rawId}`;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [viewW, setViewW] = useState(300);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => setViewW(el.clientWidth || 300);
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Newest first so the strip opens on "now" at the left edge and
+  // scrolling right walks back through the week.
+  const ordered = useMemo(() => (points.length ? [...points].reverse() : [{ grams: 0 }, { grams: 0 }]), [points]);
+
+  const marginTop = 10;
+  const marginBottom = xAxisLabel ? 36 : 22;
+  const plotH = height - marginTop - marginBottom;
+  const padX = 12;
+  const plotW = Math.max(viewW, ordered.length * PX_PER_POINT + padX * 2);
+  const maxGrams = useMemo(() => niceMax(Math.max(...ordered.map((p) => p.grams), 0)), [ordered]);
+
+  const xFor = (i: number) => padX + (ordered.length <= 1 ? 0 : (i / (ordered.length - 1)) * (plotW - padX * 2));
+  const yFor = (g: number) => marginTop + plotH - (Math.max(0, g) / maxGrams) * plotH;
+
+  const linePath = ordered.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i).toFixed(1)} ${yFor(p.grams).toFixed(1)}`).join(' ');
+  const base = marginTop + plotH;
+  const areaPath = `${linePath} L ${xFor(ordered.length - 1).toFixed(1)} ${base} L ${xFor(0).toFixed(1)} ${base} Z`;
+  const lineColor = colorFor(ordered[0]?.severity);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => maxGrams * f);
+
+  // One time label roughly every 90px so day+time labels never overlap.
+  const labelEvery = Math.max(1, Math.round(90 / Math.max(1, plotW / Math.max(1, ordered.length - 1))));
+  const labelIdx = ordered.map((_, i) => i).filter((i) => i % labelEvery === 0);
+
+  return (
+    <div className={className}>
+      <div className="flex" style={{ height }}>
+        {/* Fixed y-axis: stays put while the plot scrolls */}
+        <svg width={AXIS_W} height={height} className="flex-shrink-0">
+          {yTicks.map((g, i) => (
+            <text key={i} x={AXIS_W - 6} y={yFor(g) + 3} textAnchor="end" fontSize="9" fill="#808080" fontFamily="monospace">
+              {g.toFixed(1)}
+            </text>
+          ))}
+          <text x={4} y={marginTop + 4} fontSize="9" fill="#606060" fontFamily="monospace">
+            g
+          </text>
+        </svg>
+
+        <div ref={wrapRef} className="flex-1 min-w-0 overflow-x-auto overscroll-x-contain" style={{ height }}>
+          <svg width={plotW} height={height} viewBox={`0 0 ${plotW} ${height}`} style={{ display: 'block' }}>
+            <defs>
+              <linearGradient id={fillId} x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor={lineColor} stopOpacity="0.28" />
+                <stop offset="100%" stopColor={lineColor} stopOpacity="0" />
+              </linearGradient>
+              <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1={padX} y1="0" x2={plotW - padX} y2="0">
+                {ordered.map((p, i) => (
+                  <stop key={i} offset={`${(i / Math.max(1, ordered.length - 1)) * 100}%`} stopColor={colorFor(p.severity)} />
+                ))}
+              </linearGradient>
+            </defs>
+
+            {yTicks.map((g, i) => (
+              <line key={i} x1={0} y1={yFor(g)} x2={plotW} y2={yFor(g)} stroke="#262626" strokeWidth="1" />
+            ))}
+
+            <path d={areaPath} fill={`url(#${fillId})`} stroke="none" />
+            <path d={linePath} fill="none" stroke={`url(#${gradId})`} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+
+            {labelIdx.map((i) => (
+              <text key={i} x={xFor(i)} y={base + 14} textAnchor="middle" fontSize="9" fill="#808080" fontFamily="monospace">
+                {formatDayTime(ordered[i].timestamp)}
+              </text>
+            ))}
+            {xAxisLabel && (
+              <text x={Math.min(plotW / 2, viewW / 2)} y={height - 6} textAnchor="middle" fontSize="9" fill="#606060" fontFamily="monospace">
+                {xAxisLabel}
+              </text>
+            )}
+          </svg>
+        </div>
+      </div>
+      <p className="text-[10px] text-[#606060] font-mono mt-1.5 text-center">
+        Latest at left &middot; scroll right for earlier readings (last 7 days)
+      </p>
     </div>
   );
 };

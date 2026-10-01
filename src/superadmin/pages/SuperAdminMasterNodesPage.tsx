@@ -1,46 +1,33 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Radio,
-  Battery,
   Wifi,
-  Waves,
-  Zap,
-  BatteryCharging,
-  Cpu,
-  PlayCircle,
-  RotateCw,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Layers,
+  Eye,
   X,
+  CheckCircle2,
+  AlertTriangle,
+  Activity,
+  Clock,
+  Sparkles,
+  Cpu,
+  Layers,
   Crown,
 } from 'lucide-react';
 import { superAdminApi, SuperAdminMasterNode, SuperAdminApiError } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
 
-type ComponentKey = 'piezo' | 'lora' | 'ads' | 'battery';
-type TestState = 'idle' | 'running' | 'pass' | 'fail';
-
-const COMPONENTS: Array<{ key: ComponentKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { key: 'piezo', label: 'Piezoelectric Sensor', icon: Waves },
-  { key: 'lora', label: 'LoRa Radio', icon: Radio },
-  { key: 'ads', label: 'ADS (ADC)', icon: Zap },
-  { key: 'battery', label: 'Battery', icon: BatteryCharging },
-];
-
-// Deterministic-ish simulated pass/fail: healthy, online nodes almost
-// always pass; nodes already flagged offline / low battery / with
-// damaged transducers are far more likely to surface a failing
-// component, so the self-test result tracks the node's real telemetry
-// instead of being pure noise.
-function simulateResult(node: SuperAdminMasterNode, key: ComponentKey): boolean {
-  if (!node.online) return key === 'battery' ? (node.batteryPercent ?? 0) > 5 : false;
-  if (key === 'piezo') return node.damagedSensors === 0 || Math.random() > 0.3;
-  if (key === 'battery') return (node.batteryPercent ?? 0) > 20;
-  if (key === 'lora') return !node.signalRssi?.toLowerCase().includes('no signal');
-  return Math.random() > 0.05; // ADS
+// Sensor ids are "{nodeId}-{pin}" (A0-A3) -- pull the pin back out so
+// each tile can show a meaningful label ("Piezo 1 (A0)"), and so a
+// NOT_CONNECTED tile (no piezo wired to that pin yet) reads differently
+// from an actual hardware fault (DAMAGED). Same helpers as the owner portal.
+function pinOf(sensorId: string): string {
+  return sensorId.split('-').pop() ?? '';
+}
+function piezoLabel(sensorId: string): string {
+  const pin = pinOf(sensorId);
+  const num = ['A0', 'A1', 'A2', 'A3'].indexOf(pin) + 1;
+  return `Piezo ${num > 0 ? num : '?'} (${pin})`;
 }
 
 // One owner's hubs, oldest link first. A node's linkedAt is when its
@@ -91,7 +78,7 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
   const [nodes, setNodes] = useState<SuperAdminMasterNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [testState, setTestState] = useState<Record<string, TestState>>({});
+  const [viewedNode, setViewedNode] = useState<SuperAdminMasterNode | null>(null);
   const [expandedOwnerId, setExpandedOwnerId] = useState<string | null>(null);
 
   const load = () => {
@@ -107,21 +94,6 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
     load();
   }, []);
 
-  const keyFor = (nodeId: string, componentKey: ComponentKey) => `${nodeId}:${componentKey}`;
-
-  const runComponentTest = (node: SuperAdminMasterNode, componentKey: ComponentKey) => {
-    const k = keyFor(node.id, componentKey);
-    setTestState((prev) => ({ ...prev, [k]: 'running' }));
-    setTimeout(() => {
-      const passed = simulateResult(node, componentKey);
-      setTestState((prev) => ({ ...prev, [k]: passed ? 'pass' : 'fail' }));
-    }, 900 + Math.random() * 500);
-  };
-
-  const runAllTests = (node: SuperAdminMasterNode) => {
-    COMPONENTS.forEach((c) => runComponentTest(node, c.key));
-  };
-
   const onlineCount = nodes.filter((n) => n.online).length;
 
   const { groups, unassigned } = useMemo(() => groupNodesByOwner(nodes), [nodes]);
@@ -133,7 +105,7 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
         eyebrow="Super Admin Console"
         subtitle="Device Health Monitoring"
         title="Master Node Mesh"
-        description="Plantation-wide monitoring of every master control hub, one card per farm owner. An owner's hubs added later (via QR self-service) are grouped under their first master node -- open a card to see the rest of that owner's mesh. Run per-component self-tests without sending any reboot or power control command."
+        description="Plantation-wide monitoring of every master control hub, one card per farm owner. An owner's hubs added later (via QR self-service) are grouped under their first master node -- open a card to see the rest of that owner's mesh. Health data is view-only."
         accent="#D4AF37"
         actions={
           <div className="px-3.5 py-1.5 rounded bg-[#1A1A1A] border border-[#333333] text-xs font-mono text-[#D4AF37] flex items-center gap-2">
@@ -161,10 +133,7 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
             <NodeCard
               key={group.ownerId}
               node={group.nodes[0]}
-              testState={testState}
-              keyFor={keyFor}
-              runComponentTest={runComponentTest}
-              runAllTests={runAllTests}
+              onView={setViewedNode}
               extraCount={group.nodes.length - 1}
               onViewAll={group.nodes.length > 1 ? () => setExpandedOwnerId(group.ownerId) : undefined}
             />
@@ -173,10 +142,7 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
             <NodeCard
               key={node.id}
               node={node}
-              testState={testState}
-              keyFor={keyFor}
-              runComponentTest={runComponentTest}
-              runAllTests={runAllTests}
+              onView={setViewedNode}
               extraCount={0}
             />
           ))}
@@ -185,8 +151,113 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
 
       <PageFooterNote
         icon={Cpu}
-        text="Self-tests run in-app simulated diagnostics to confirm each device is still reporting. This screen is monitoring-only — reboot and power controls remain restricted to the Admin console."
+        text="Health data here is view-only — reboot and power controls remain restricted to the Admin console."
       />
+
+      {viewedNode && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setViewedNode(null)}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded bg-[#141414] border border-[#262626] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#262626] sticky top-0 bg-[#141414]">
+              <div>
+                <h3 className="font-mono text-lg font-bold text-white">{viewedNode.id}</h3>
+                <p className="text-[11px] text-[#808080]">{viewedNode.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewedNode(null)}
+                className="p-1.5 rounded hover:bg-[#1A1A1A] text-[#808080] hover:text-white transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
+                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
+                    <Activity className="w-3 h-3" /> Status
+                  </p>
+                  <p className={`text-sm font-mono font-bold ${viewedNode.online ? 'text-[#4CAF50]' : 'text-[#F44336]'}`}>
+                    {viewedNode.online ? 'ONLINE' : 'OFFLINE'}
+                  </p>
+                </div>
+                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
+                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
+                    <Wifi className="w-3 h-3" /> Signal
+                  </p>
+                  <p className="text-sm font-mono font-bold text-white truncate">{viewedNode.signalRssi ?? 'No data yet'}</p>
+                </div>
+                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
+                  <p className="text-[10px] uppercase text-[#808080] font-bold flex items-center gap-1.5 mb-1">
+                    <Clock className="w-3 h-3" /> Last Ping
+                  </p>
+                  <p className="text-sm font-mono font-bold text-white truncate">{viewedNode.lastPing ?? 'Never connected'}</p>
+                </div>
+              </div>
+
+              {viewedNode.note && (
+                <div className="rounded bg-[#0A0A0A] border border-[#262626] p-3">
+                  <p className="text-[10px] uppercase text-[#808080] font-bold mb-1">Note</p>
+                  <p className="text-xs text-[#E0E0E0]">{viewedNode.note}</p>
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#808080] mb-2">
+                  <span>Piezo Transducers</span>
+                  <span className="font-mono text-[#D4AF37]">
+                    {viewedNode.workingSensors} / {viewedNode.totalSensors} Active
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {viewedNode.sensors.map((sensor) => {
+                    const isDamaged = sensor.status === 'DAMAGED';
+                    const isNotConnected = sensor.status === 'NOT_CONNECTED';
+                    const isDisabled = isDamaged || isNotConnected;
+                    return (
+                      <div
+                        key={sensor.id}
+                        className={`flex items-center justify-between px-3 py-2 rounded border text-xs font-mono ${
+                          isDamaged
+                            ? 'bg-[#2B1B1B] border-[#F44336]/30 text-[#F44336]'
+                            : isNotConnected
+                            ? 'bg-[#141414] border-[#333333] text-[#666666]'
+                            : 'bg-[#0A0A0A] border-[#262626] text-[#E0E0E0]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          {isDamaged ? (
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          ) : isNotConnected ? (
+                            <X className="w-3.5 h-3.5" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#4CAF50]" />
+                          )}
+                          {piezoLabel(sensor.id)}
+                          {!isDisabled && <span className="text-[#808080]">· Tree {sensor.treeId}</span>}
+                        </span>
+                        <span>{isNotConnected ? 'Not Connected' : `${sensor.status} · ${sensor.voltageMv}mV`}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-3 border-t border-[#262626] flex items-center gap-1.5 text-[10px] text-[#808080]">
+              <Sparkles className="w-3 h-3 text-[#D4AF37]" />
+              <span>Display-only view. Remote control actions are not available from the Super Admin console.</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {expandedGroup && (
         <div
@@ -222,10 +293,7 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
                 <NodeCard
                   key={node.id}
                   node={node}
-                  testState={testState}
-                  keyFor={keyFor}
-                  runComponentTest={runComponentTest}
-                  runAllTests={runAllTests}
+                  onView={setViewedNode}
                   isPrimary={i === 0}
                   extraCount={0}
                 />
@@ -238,146 +306,113 @@ export const SuperAdminMasterNodesPage: React.FC = () => {
   );
 };
 
-// One hub's monitoring card: header/status, battery+signal quick
-// stats, the 4-component self-test grid, and a damaged-sensor warning.
-// Shared by the main grid (where it renders just an owner's first node)
-// and the "view all" modal (where it renders every node in that
-// owner's group) so the two never drift out of sync.
+// One hub's monitoring card, laid out like the Owner Portal's Master Node
+// Mesh card: status badge, id/name, signal RSSI, piezo pin tiles and a
+// View button. Shared by the main grid (an owner's first node) and the
+// "view all" modal (every node in that owner's group).
 const NodeCard: React.FC<{
   node: SuperAdminMasterNode;
-  testState: Record<string, TestState>;
-  keyFor: (nodeId: string, componentKey: ComponentKey) => string;
-  runComponentTest: (node: SuperAdminMasterNode, componentKey: ComponentKey) => void;
-  runAllTests: (node: SuperAdminMasterNode) => void;
+  onView: (node: SuperAdminMasterNode) => void;
   isPrimary?: boolean;
   extraCount: number;
   onViewAll?: () => void;
-}> = ({ node, testState, keyFor, runComponentTest, runAllTests, isPrimary, extraCount, onViewAll }) => {
+}> = ({ node, onView, isPrimary, extraCount, onViewAll }) => {
   return (
     <div
-      className={`rounded border p-6 shadow-xl space-y-5 transition-all ${
+      className={`rounded border p-6 shadow-xl relative overflow-hidden flex flex-col justify-between space-y-5 transition-all ${
         node.online
           ? 'bg-[#141414] border-[#262626] hover:border-[#D4AF37]/50'
           : 'bg-[#1C1212] border-[#F44336]/40 hover:border-[#F44336]'
       }`}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className="font-mono text-xs font-bold text-[#D4AF37] uppercase tracking-wider">
-              {node.sector}
+      <div>
+        <div className="flex items-center justify-end gap-2 mb-3 flex-wrap">
+          {isPrimary && (
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-[#1A1508] text-[#D4AF37] border border-[#D4AF37]/30 flex items-center gap-1">
+              <Crown className="w-2.5 h-2.5" /> First Node
             </span>
-            <span
-              className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
-                node.online
-                  ? 'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
-                  : 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
-              }`}
-            >
-              {node.online ? 'ONLINE' : 'OFFLINE'}
+          )}
+          <span
+            className={`px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
+              node.online
+                ? 'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
+                : 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
+            }`}
+          >
+            {node.online ? 'ONLINE' : 'OFFLINE'}
+          </span>
+        </div>
+
+        <h3 className="font-mono text-xl sm:text-2xl font-bold text-white">{node.id}</h3>
+        <p className="text-xs text-[#808080] mt-0.5">{node.name}</p>
+        <p className="text-[10px] text-[#606060] mt-1">
+          Owner: <span className="text-[#A0A0A0]">{node.ownerName || 'Unassigned'}</span>
+        </p>
+
+        <div className="mt-4 space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-[#808080] flex items-center gap-1.5">
+              <Wifi className="w-4 h-4 text-[#D4AF37]" />
+              <span>Signal RSSI</span>
             </span>
-            {isPrimary && (
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-[#1A1508] text-[#D4AF37] border border-[#D4AF37]/30 flex items-center gap-1">
-                <Crown className="w-2.5 h-2.5" /> First Node
-              </span>
-            )}
+            <span className="font-mono text-[#E0E0E0] font-semibold">{node.signalRssi ?? 'No data yet'}</span>
           </div>
-          <h3 className="font-mono text-xl font-bold text-white">{node.id}</h3>
-          <p className="text-xs text-[#808080] mt-0.5">{node.name}</p>
-          <p className="text-[10px] text-[#606060] mt-1">
-            Owner: <span className="text-[#A0A0A0]">{node.ownerName || 'Unassigned'}</span>
-          </p>
         </div>
-        <button
-          type="button"
-          onClick={() => runAllTests(node)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded bg-[#D4AF37] hover:bg-[#E5C158] text-black font-bold text-[11px] uppercase tracking-wider transition-colors flex-shrink-0"
-        >
-          <PlayCircle className="w-3.5 h-3.5" />
-          Test All
-        </button>
-      </div>
 
-      {/* Quick stats */}
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div className="flex items-center justify-between rounded bg-[#0A0A0A] border border-[#262626] px-3 py-2">
-          <span className="text-[#808080] flex items-center gap-1.5">
-            <Battery className="w-3.5 h-3.5 text-[#D4AF37]" /> Battery
-          </span>
-          <span className="font-mono font-bold text-white">
-            {node.batteryPercent == null ? '—' : `${node.batteryPercent}%`}
-          </span>
-        </div>
-        <div className="flex items-center justify-between rounded bg-[#0A0A0A] border border-[#262626] px-3 py-2">
-          <span className="text-[#808080] flex items-center gap-1.5">
-            <Wifi className="w-3.5 h-3.5 text-[#D4AF37]" /> Signal
-          </span>
-          <span className="font-mono font-bold text-white truncate max-w-[7rem]">{node.signalRssi ?? 'No data yet'}</span>
-        </div>
-      </div>
-
-      {/* Component self-test grid */}
-      <div className="pt-3 border-t border-[#262626]">
-        <p className="text-[10px] uppercase font-bold text-[#808080] mb-2.5">Component Self-Test</p>
-        <div className="grid grid-cols-2 gap-2.5">
-          {COMPONENTS.map((c) => {
-            const state = testState[keyFor(node.id, c.key)] || 'idle';
-            const Icon = c.icon;
-            return (
-              <button
-                key={c.key}
-                type="button"
-                disabled={state === 'running'}
-                onClick={() => runComponentTest(node, c.key)}
-                className={`text-left rounded border px-3 py-2.5 transition-colors ${
-                  state === 'pass'
-                    ? 'bg-[#0F1F12] border-[#4CAF50]/40 hover:border-[#4CAF50]'
-                    : state === 'fail'
-                    ? 'bg-[#2B1B1B] border-[#F44336]/40 hover:border-[#F44336]'
-                    : 'bg-[#0A0A0A] border-[#262626] hover:border-[#D4AF37]/50'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[#E0E0E0]">
-                    <Icon className="w-3.5 h-3.5 text-[#D4AF37]" />
-                    {c.label}
-                  </span>
-                  {state === 'running' && <RotateCw className="w-3.5 h-3.5 text-[#D4AF37] animate-spin" />}
-                  {state === 'pass' && <CheckCircle2 className="w-3.5 h-3.5 text-[#4CAF50]" />}
-                  {state === 'fail' && <XCircle className="w-3.5 h-3.5 text-[#F44336]" />}
+        <div className="mt-4 pt-3 border-t border-[#262626]">
+          <div className="flex items-center justify-between text-[11px] font-bold text-[#808080] mb-2">
+            <span>Piezo Transducers</span>
+            <span className="font-mono text-[#D4AF37]">
+              {node.workingSensors} / {node.totalSensors} Active
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {node.sensors.map((sensor) => {
+              const isDamaged = sensor.status === 'DAMAGED';
+              const isNotConnected = sensor.status === 'NOT_CONNECTED';
+              const isDisabled = isDamaged || isNotConnected;
+              return (
+                <div
+                  key={sensor.id}
+                  className={`h-7 rounded border flex items-center justify-center font-mono text-[9px] font-bold transition-all ${
+                    isDamaged
+                      ? 'bg-[#2B1B1B] border-[#F44336]/40 text-[#F44336]'
+                      : isNotConnected
+                      ? 'bg-[#151515] border-[#333333] text-[#666666]'
+                      : 'bg-[#0A0A0A] border-[#262626] text-[#D4AF37]'
+                  }`}
+                  title={`${sensor.id} (${pinOf(sensor.id)}) - Tree ${sensor.treeId} · ${
+                    isDisabled ? (isNotConnected ? 'Not Connected' : 'Damaged') : sensor.status
+                  }`}
+                >
+                  {pinOf(sensor.id)}
                 </div>
-                <p className="text-[10px] text-[#808080] mt-1 font-mono">
-                  {state === 'idle' && 'Tap to run test'}
-                  {state === 'running' && 'Testing…'}
-                  {state === 'pass' && 'Working normally'}
-                  {state === 'fail' && 'Fault detected'}
-                </p>
-              </button>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      {node.damagedSensors > 0 && (
-        <div className="flex items-center gap-2 rounded bg-[#2B1B1B] border border-[#F44336]/30 px-3 py-2 text-[11px] text-[#F44336]">
-          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span>
-            {node.damagedSensors} of {node.totalSensors} piezo transducers reporting damage.
-          </span>
-        </div>
-      )}
-
-      {onViewAll && (
+      <div className="pt-3 border-t border-[#262626] space-y-2">
         <button
           type="button"
-          onClick={onViewAll}
-          className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded bg-[#1A1A1A] hover:bg-[#222222] border border-[#262626] text-[#D4AF37] font-semibold text-xs transition-colors"
+          onClick={() => onView(node)}
+          className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded bg-[#1A1A1A] hover:bg-[#222222] border border-[#262626] text-[#E0E0E0] font-semibold text-xs transition-colors"
         >
-          <Layers className="w-3.5 h-3.5" />
-          View all {extraCount + 1} master nodes for this owner
+          <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <span>View</span>
         </button>
-      )}
+        {onViewAll && (
+          <button
+            type="button"
+            onClick={onViewAll}
+            className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded bg-[#1A1A1A] hover:bg-[#222222] border border-[#262626] text-[#D4AF37] font-semibold text-xs transition-colors"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            View all {extraCount + 1} master nodes for this owner
+          </button>
+        )}
+      </div>
     </div>
   );
 };
