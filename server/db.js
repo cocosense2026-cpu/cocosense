@@ -255,6 +255,10 @@ const migrations = [
   // that first node instead of listing every hub as its own top-level
   // entry.
   `ALTER TABLE master_nodes ADD COLUMN linked_at TEXT`,
+  // last_seen_at: presence for the admin console's Recent Activity page
+  // (who is online right now). owner_access_log itself is a brand-new
+  // table, so CREATE TABLE IF NOT EXISTS in schema.sql covers it.
+  `ALTER TABLE owner_sessions ADD COLUMN last_seen_at TEXT`,
 ];
 
 // No top-level `await` here on purpose: esbuild can't compile top-level

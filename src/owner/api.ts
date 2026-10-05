@@ -170,6 +170,13 @@ export const ownerApi = {
     request<{ ok: true; owner: any }>('/owner/me', { method: 'PATCH', body: JSON.stringify(data) }),
   activity: () => request<any[]>('/owner/activity'),
 
+  // Access tracking for the admin console's Recent Activity page -- see
+  // src/owner/hooks/useOwnerActivityTracking.ts. The server decides the
+  // label from the path, so this only ever reports a route.
+  trackOpen: (path: string) =>
+    request<{ ok: true }>('/owner/activity/open', { method: 'POST', body: JSON.stringify({ path }) }),
+  heartbeat: () => request<{ ok: true }>('/owner/activity/heartbeat', { method: 'POST' }),
+
   dashboard: () => request<any>('/owner/dashboard'),
 
   events: (sort: 'recent' | 'strongest') => request<any>(`/owner/events?sort=${sort}`),

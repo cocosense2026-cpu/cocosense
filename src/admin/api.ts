@@ -90,6 +90,52 @@ async function request<T>(
   return body as T;
 }
 
+// ---------- Recent Activity (server/routes/adminActivity.js) ----------
+export type OwnerPresence = 'online' | 'away' | 'offline';
+export type ActivityKind = 'open' | 'action' | 'account' | 'alert' | 'registration';
+
+export interface ActivityOwnerBrief {
+  id: string;
+  name: string;
+  initials: string | null;
+  color: string | null;
+  avatarUrl: string | null;
+}
+
+export interface ActivityItem {
+  id: string;
+  kind: ActivityKind;
+  action: string;
+  detail: string | null;
+  /** Page route for 'open' events, severity for 'alert' events. */
+  meta: string | null;
+  at: string;
+  owner: ActivityOwnerBrief;
+}
+
+export interface OwnerActivitySummary extends ActivityOwnerBrief {
+  email: string | null;
+  sector: string | null;
+  status: string | null;
+  accountConfirmed: boolean;
+  registeredAt: string | null;
+  presence: OwnerPresence;
+  lastSeenAt: string | null;
+  activeSessions: number;
+  lastSignInAt: string | null;
+  lastActivityAt: string | null;
+  lastOpened: { label: string; detail: string | null; at: string } | null;
+  opens24h: number;
+  actions24h: number;
+  nodesCount: number;
+}
+
+export interface OwnerActivityDetail {
+  owner: OwnerActivitySummary;
+  topPages: Array<{ label: string; count: number }>;
+  last7Days: Array<{ day: string; opens: number }>;
+}
+
 export const adminApi = {
   login: (email: string, password: string) =>
     request<{ ok: true; token: string; admin: any }>(
@@ -101,6 +147,19 @@ export const adminApi = {
   me: () => request<{ ok: true; admin: any }>('/admin/me'),
   updateProfile: (data: { name?: string; email?: string; avatarUrl?: string | null }) =>
     request<{ ok: true; admin: any }>('/admin/profile', { method: 'PATCH', body: JSON.stringify(data) }),
+  activityOwners: () =>
+    request<{ ok: true; serverTime: string; owners: OwnerActivitySummary[] }>('/admin/activity/owners'),
+  activityOwner: (ownerId: string) =>
+    request<{ ok: true } & OwnerActivityDetail>(`/admin/activity/owners/${encodeURIComponent(ownerId)}`),
+  activityFeed: (opts: { ownerId?: string | null; kind?: ActivityKind | null; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.ownerId) q.set('ownerId', opts.ownerId);
+    if (opts.kind) q.set('kind', opts.kind);
+    q.set('limit', String(opts.limit ?? 50));
+    return request<{ ok: true; serverTime: string; items: ActivityItem[]; hasMore: boolean }>(
+      `/admin/activity/feed?${q.toString()}`
+    );
+  },
   exportBackup: () =>
     request<{ ok: true; version: string; exportedAt: string; exportedBy: string; system: string; tables: Record<string, unknown[]> }>(
       '/admin/backup/export',

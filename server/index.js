@@ -20,6 +20,7 @@ import ownerRoutes from './routes/owner.js';
 import adminRoutes from './routes/admin.js';
 import superadminRoutes from './routes/superadmin.js';
 import backupRoutes from './routes/backup.js';
+import adminActivityRoutes from './routes/adminActivity.js';
 
 const app = express();
 // Raised from Express's 100kb default so a profile-picture data URL
@@ -77,6 +78,10 @@ app.use('/api', superadminRoutes);
 // System backup/export & restore for the admin console -- under
 // /api/admin/backup/*. See server/routes/backup.js.
 app.use('/api', backupRoutes);
+
+// Admin console "Recent Activity" -- live view of what every farm owner is
+// doing in their portal. Admin-auth only. See server/routes/adminActivity.js.
+app.use('/api', adminActivityRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

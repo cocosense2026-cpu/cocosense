@@ -392,6 +392,7 @@ router.delete('/owners/:id', async (req, res) => {
     await db.prepare(`DELETE FROM owner_sessions WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`DELETE FROM owner_settings WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`DELETE FROM owner_activity WHERE owner_id = ?`).run(req.params.id);
+    await db.prepare(`DELETE FROM owner_access_log WHERE owner_id = ?`).run(req.params.id);
     await db.prepare(`DELETE FROM notifications WHERE owner_id = ?`).run(req.params.id);
     const orphanedNodes = await db.prepare(`SELECT id FROM master_nodes WHERE owner_id = ?`).all(req.params.id);
     const orphanedTrees = await db.prepare(`SELECT id FROM monitored_trees WHERE owner_id = ?`).all(req.params.id);
@@ -568,6 +569,7 @@ const HASHED_TABLES = {
   superadmins: { table: 'superadmins', idColumn: 'id' },
   ownerSettings: { table: 'owner_settings', idColumn: 'owner_id' },
   ownerActivity: { table: 'owner_activity', idColumn: 'id' },
+  ownerAccessLog: { table: 'owner_access_log', idColumn: 'id' },
   superadminActivity: { table: 'superadmin_activity', idColumn: 'id' },
 };
 

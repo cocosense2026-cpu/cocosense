@@ -64,7 +64,11 @@ CREATE TABLE IF NOT EXISTS owner_sessions (
   token               TEXT PRIMARY KEY,
   owner_id            TEXT NOT NULL REFERENCES farm_owners(id) ON DELETE CASCADE,
   created_at          TEXT DEFAULT (datetime('now')),
-  expires_at          TEXT NOT NULL
+  expires_at          TEXT NOT NULL,
+  -- Presence: bumped (throttled) by requireOwnerAuth and by the portal's
+  -- heartbeat ping, so the admin console's Recent Activity page can show
+  -- who is online right now. See server/accessLog.js.
+  last_seen_at        TEXT
 );
 
 -- Per-owner notification + display preferences, edited from the Owner
@@ -86,6 +90,29 @@ CREATE TABLE IF NOT EXISTS owner_activity (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_id            TEXT NOT NULL REFERENCES farm_owners(id) ON DELETE CASCADE,
   action              TEXT NOT NULL,
+  detail              TEXT,
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
+);
+
+-- Everything an owner *does* inside the portal after signing in: every
+-- page/item they open, plus actions like marking notifications read or
+-- saving settings. Feeds the admin console's Recent Activity page.
+--
+-- Deliberately separate from owner_activity (above): that table is the
+-- owner's own short "Recent Activity" list on their Profile page and
+-- already has hashed rows in production, so adding columns to it would
+-- change what every existing row_hash covers. Page opens are also far
+-- more frequent, and would drown the account events (signed in,
+-- password changed, ...) the owner is meant to see on their profile.
+--   kind   : 'open' (viewed a page/item) | 'action' | 'account'
+--   target : the route that was opened, e.g. /owner/events/piezo/MN-1-A0
+CREATE TABLE IF NOT EXISTS owner_access_log (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id            TEXT NOT NULL REFERENCES farm_owners(id) ON DELETE CASCADE,
+  kind                TEXT NOT NULL DEFAULT 'open',
+  action              TEXT NOT NULL,
+  target              TEXT,
   detail              TEXT,
   created_at          TEXT DEFAULT (datetime('now')),
   row_hash            TEXT
@@ -316,6 +343,8 @@ CREATE INDEX IF NOT EXISTS idx_notifications_owner ON notifications(owner_id, au
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id);
 CREATE INDEX IF NOT EXISTS idx_owner_sessions_owner ON owner_sessions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_owner_activity_owner ON owner_activity(owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_owner_access_log_owner ON owner_access_log(owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_owner_access_log_time ON owner_access_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_owners_confirm_token ON farm_owners(confirm_token_hash);
 CREATE INDEX IF NOT EXISTS idx_superadmin_sessions_sa ON superadmin_sessions(superadmin_id);
 CREATE INDEX IF NOT EXISTS idx_superadmin_activity_sa ON superadmin_activity(superadmin_id, created_at DESC);

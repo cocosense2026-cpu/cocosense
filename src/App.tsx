@@ -18,6 +18,8 @@ import { AlertHistoryView } from './views/AlertHistoryView';
 import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
+import { RecentActivityView } from './views/RecentActivityView';
+import { adminApi } from './admin/api';
 import { Search, Bell, AlertTriangle, Menu } from 'lucide-react';
 import { usePolling } from './hooks/usePolling';
 
@@ -39,6 +41,11 @@ export function App() {
   const [alerts, setAlerts] = useState<PestAlert[]>(INITIAL_ALERTS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
   const [vibrationEvents, setVibrationEvents] = useState<VibrationEvent[]>(INITIAL_VIBRATION_EVENTS);
+
+  // Owners currently online in their portal -- drives the live badge on
+  // the Recent Activity sidebar item. The Recent Activity view itself
+  // polls faster; this just keeps the badge honest from any other tab.
+  const [onlineOwnersCount, setOnlineOwnersCount] = useState<number>(0);
 
   // Toast Notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -96,6 +103,17 @@ export function App() {
   // refresh. Pauses automatically while the browser tab isn't visible
   // (see usePolling) so an idle tab doesn't keep polling forever.
   usePolling(() => loadAll(false), 10000);
+
+  const refreshOnlineOwners = React.useCallback(() => {
+    adminApi
+      .activityOwners()
+      .then((res) => setOnlineOwnersCount(res.owners.filter((o) => o.presence === 'online').length))
+      .catch(() => void 0);
+  }, []);
+  useEffect(() => {
+    refreshOnlineOwners();
+  }, [refreshOnlineOwners]);
+  usePolling(refreshOnlineOwners, 15000);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -277,6 +295,7 @@ export function App() {
         unreadCount={unreadCount}
         criticalAlertsCount={criticalAlertsCount}
         ownersCount={owners.length}
+        onlineOwnersCount={onlineOwnersCount}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         mobileMenuOpen={mobileMenuOpen}
@@ -382,6 +401,8 @@ export function App() {
               onResendInvite={handleResendInvite}
             />
           )}
+
+          {currentView === 'activity' && <RecentActivityView />}
 
           {currentView === 'municipalities' && (
             <MunicipalityMapView

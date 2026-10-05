@@ -16,6 +16,7 @@ import { ThemeToggle } from '../../components/ThemeToggle';
 import { Avatar } from '../../components/Avatar';
 import { useOwnerAuth } from '../context/OwnerAuthContext';
 import { ownerApi } from '../api';
+import { useOwnerActivityTracking } from '../hooks/useOwnerActivityTracking';
 
 // NAV_ITEMS is a function of unreadCount so the "Notifications" row can
 // carry a live badge, the same way the Admin sidebar's own nav items
@@ -57,6 +58,10 @@ export const OwnerShell: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const pageLabel = getBreadcrumbLabel(location.pathname);
   const navItems = buildNavItems(unreadCount);
+
+  // Tells the admin console which page this owner just opened, and that
+  // they're still here. See the hook for details.
+  useOwnerActivityTracking();
 
   // Live badge count for the Notifications row + header bell, mirroring
   // how src/App.tsx wires unreadCount into the Admin sidebar/header.

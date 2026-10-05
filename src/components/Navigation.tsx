@@ -15,12 +15,14 @@ import {
   ChevronRight,
   Sun,
   Moon,
-  LogOut
+  LogOut,
+  Activity
 } from 'lucide-react';
 
 export type ActiveView = 
   | 'dashboard'
   | 'owners'
+  | 'activity'
   | 'municipalities'
   | 'alerts'
   | 'reports'
@@ -33,6 +35,8 @@ interface NavigationProps {
   unreadCount: number;
   criticalAlertsCount: number;
   ownersCount: number;
+  /** Farm owners currently online in their portal -- badge on Recent Activity. */
+  onlineOwnersCount?: number;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   mobileMenuOpen: boolean;
@@ -45,6 +49,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   unreadCount,
   criticalAlertsCount,
   ownersCount,
+  onlineOwnersCount = 0,
   mobileMenuOpen,
   setMobileMenuOpen,
 }) => {
@@ -67,6 +72,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   const navItems = [
     { id: 'dashboard' as ActiveView, label: 'Dashboard & Radar', icon: LayoutDashboard, badge: null },
     { id: 'owners' as ActiveView, label: 'Farm Owners', icon: Users, badge: '5' },
+    { id: 'activity' as ActiveView, label: 'Recent Activity', icon: Activity, badge: onlineOwnersCount > 0 ? `${onlineOwnersCount} LIVE` : null, liveTone: true },
     { id: 'municipalities' as ActiveView, label: 'Municipality Map', icon: MapPinned, badge: `${ownersCount}` },
     { id: 'alerts' as ActiveView, label: 'Alert History', icon: AlertTriangle, badge: criticalAlertsCount > 0 ? `${criticalAlertsCount} CRIT` : null, alertTone: true },
     { id: 'reports' as ActiveView, label: 'Bioacoustic Reports', icon: FileText, badge: null },
@@ -135,6 +141,8 @@ export const Navigation: React.FC<NavigationProps> = ({
                       className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold tracking-tighter uppercase ml-2 flex-shrink-0 ${
                         item.alertTone
                           ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
+                          : item.liveTone
+                          ? 'bg-[#142416] text-[#4CAF50] border border-[#4CAF50]/30'
                           : 'bg-[#1A1A1A] text-[#808080] border border-[#333333]'
                       }`}
                     >
@@ -230,7 +238,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                       <span>{item.label}</span>
                     </div>
                     {item.badge && (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono ${item.alertTone ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30' : 'bg-[#1A1A1A] text-[#808080]'}`}>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono ${item.alertTone ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30' : item.liveTone ? 'bg-[#142416] text-[#4CAF50] border border-[#4CAF50]/30' : 'bg-[#1A1A1A] text-[#808080]'}`}>
                         {item.badge}
                       </span>
                     )}

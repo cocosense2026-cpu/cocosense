@@ -17,6 +17,7 @@ import {
 } from '../auth.js';
 import { sendMail } from '../mailer.js';
 import { restampRowHash } from '../hash.js';
+import { touchSession, describePath, logAccess, logAccessSafe } from '../accessLog.js';
 
 const router = Router();
 
@@ -112,6 +113,10 @@ async function requireOwnerAuth(req, res, next) {
 
   const owner = await db.prepare(`SELECT * FROM farm_owners WHERE id = ?`).get(session.owner_id);
   if (!owner) return res.status(401).json({ ok: false, error: 'Account not found.' });
+
+  // Presence for the admin console's Recent Activity page (throttled, so
+  // this is at most one small write per session every ~20s).
+  await touchSession(session);
 
   req.ownerRow = owner;
   req.ownerToken = token;
@@ -292,7 +297,7 @@ router.post('/owner/auth/login', async (req, res) => {
   }
 
   const token = generateSessionToken();
-  await db.prepare(`INSERT INTO owner_sessions (token, owner_id, expires_at) VALUES (?, ?, ?)`).run(
+  await db.prepare(`INSERT INTO owner_sessions (token, owner_id, expires_at, last_seen_at) VALUES (?, ?, ?, datetime('now'))`).run(
     token,
     owner.id,
     sessionExpiryIso()
@@ -308,6 +313,7 @@ router.post('/owner/auth/login', async (req, res) => {
 });
 
 router.post('/owner/auth/logout', requireOwnerAuth, async (req, res) => {
+  logAccessSafe(req.ownerRow.id, 'account', 'Signed out');
   await db.prepare(`DELETE FROM owner_sessions WHERE token = ?`).run(req.ownerToken);
   res.json({ ok: true });
 });
@@ -515,6 +521,24 @@ router.get('/owner/activity', requireOwnerAuth, async (req, res) => {
         .all(req.ownerRow.id, limit)
     )
   );
+});
+
+// ========== Access tracking ==========
+// Called by the portal (src/owner/hooks/useOwnerActivityTracking.ts) each
+// time the owner navigates to a page, so the admin console's Recent
+// Activity page can show what they're opening. Only known routes are
+// accepted (see describePath), and the client never supplies the label.
+router.post('/owner/activity/open', requireOwnerAuth, async (req, res) => {
+  const page = describePath(req.body?.path);
+  if (!page) return res.status(400).json({ ok: false, error: 'Unknown page.' });
+  await logAccess(req.ownerRow.id, 'open', `Opened ${page.label}`, { target: page.path, detail: page.detail });
+  res.json({ ok: true });
+});
+
+// Presence ping. requireOwnerAuth already refreshes last_seen_at, so
+// there is nothing left to do here but acknowledge.
+router.post('/owner/activity/heartbeat', requireOwnerAuth, (req, res) => {
+  res.json({ ok: true });
 });
 
 // ========== Dashboard ==========
@@ -955,6 +979,7 @@ router.patch('/owner/notifications/:id/read', requireOwnerAuth, async (req, res)
     await db.prepare(`UPDATE notifications SET is_read = 1 WHERE id = ? AND owner_id = ?`).run(id, req.ownerRow.id);
     await restampRowHash(db, 'notifications', 'id', id);
   }
+  logAccessSafe(req.ownerRow.id, 'action', prefix === 'a' ? 'Reviewed an alert' : 'Marked a notification as read');
   res.json({ ok: true });
 });
 
@@ -984,6 +1009,7 @@ router.post('/owner/notifications/read-all', requireOwnerAuth, async (req, res) 
      )`
   ).run(req.ownerRow.name, ownerId, ownerId);
   for (const id of affectedAlertIds) await restampRowHash(db, 'alerts', 'id', id);
+  logAccessSafe(ownerId, 'action', 'Marked all notifications as read');
   res.json({ ok: true });
 });
 
@@ -993,6 +1019,7 @@ router.delete('/owner/notifications/:id', requireOwnerAuth, async (req, res) => 
   if (prefix === 'n') {
     await db.prepare(`DELETE FROM notifications WHERE id = ? AND owner_id = ?`).run(id, req.ownerRow.id);
   }
+  if (prefix === 'n') logAccessSafe(req.ownerRow.id, 'action', 'Deleted a notification');
   // Alert-sourced rows ("a-…") aren't deletable here -- they're the
   // shared alert history the admin console also relies on; owners can
   // only mark them reviewed, same as the original build.
@@ -1033,6 +1060,7 @@ router.patch('/owner/settings', requireOwnerAuth, async (req, res) => {
     req.ownerRow.id
   );
   await restampRowHash(db, 'owner_settings', 'owner_id', req.ownerRow.id);
+  logAccessSafe(req.ownerRow.id, 'action', 'Updated settings');
   res.json(toCamel(await getOrCreateOwnerSettings(req.ownerRow.id)));
 });
 
