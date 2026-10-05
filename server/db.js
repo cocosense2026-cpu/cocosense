@@ -257,9 +257,35 @@ const migrations = [
 // top-level `await` keyword.
 async function initDb() {
   await db.exec(tablesSql);
-  for (const sql of migrations) {
-    try { await db.exec(sql); } catch { /* column already exists -- fine */ }
+
+  // Previously this fired every ALTER TABLE in `migrations` one after
+  // another and swallowed the "duplicate column" error from each. On a
+  // remote Turso database that is ~30 sequential network round-trips on
+  // EVERY cold start, which on Netlify (cold starts are frequent, and the
+  // function may be far from the database) can take longer than the
+  // browser's request timeout -- the admin console then shows "The server
+  // didn't respond in time" for whatever the first request happened to be
+  // (e.g. Export System Backup). Instead, read each affected table's
+  // columns once (in parallel) and only run the ALTERs that are actually
+  // missing -- usually none, so a warm database costs one parallel wave.
+  const alterRe = /^ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)/i;
+  const wanted = migrations.map((sql) => {
+    const m = sql.match(alterRe);
+    return m ? { sql, table: m[1], column: m[2].toLowerCase() } : { sql, table: null, column: null };
+  });
+  const tablesToCheck = [...new Set(wanted.map((w) => w.table).filter(Boolean))];
+  const existingColumns = {};
+  await Promise.all(
+    tablesToCheck.map(async (table) => {
+      const info = await client.execute(`PRAGMA table_info(${table})`);
+      existingColumns[table] = new Set(info.rows.map((r) => String(r.name).toLowerCase()));
+    })
+  );
+  for (const w of wanted) {
+    if (w.table && existingColumns[w.table]?.has(w.column)) continue; // already migrated
+    try { await db.exec(w.sql); } catch { /* column already exists -- fine */ }
   }
+
   if (indexesSql) await db.exec(indexesSql);
   console.log(`[db] Ready at ${url}`);
 }

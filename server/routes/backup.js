@@ -87,13 +87,21 @@ const BACKUP_TABLES = Object.keys(TABLE_COLUMNS);
 router.get('/admin/backup/export', requireAdminAuth, async (req, res) => {
   const tables = {};
   try {
-    for (const table of BACKUP_TABLES) {
-      let rows = await db.prepare(`SELECT ${TABLE_COLUMNS[table].join(', ')} FROM ${table}`).all();
-      if (table === 'farm_owners') {
-        rows = transformFields(rows, FARM_OWNER_PII_FIELDS, encryptField);
-      }
-      tables[table] = rows;
-    }
+    // Read every table at the same time instead of one after another.
+    // Each query is a separate network round-trip to the hosted database,
+    // so running them in parallel makes the export take about as long as
+    // the slowest table rather than the sum of all seven -- that sum was
+    // enough to blow past the browser's request timeout on Netlify.
+    const results = await Promise.all(
+      BACKUP_TABLES.map(async (table) => {
+        let rows = await db.prepare(`SELECT ${TABLE_COLUMNS[table].join(', ')} FROM ${table}`).all();
+        if (table === 'farm_owners') {
+          rows = transformFields(rows, FARM_OWNER_PII_FIELDS, encryptField);
+        }
+        return [table, rows];
+      })
+    );
+    for (const [table, rows] of results) tables[table] = rows;
   } catch (err) {
     if (err?.code === 'BACKUP_KEY_MISSING') {
       return res.status(500).json({ ok: false, error: err.message });

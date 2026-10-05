@@ -33,8 +33,17 @@ export class AdminApiError extends Error {
 // stuck backend request (e.g. a hung DB query) leaves the UI spinning
 // forever with no error and nothing actionable in the console.
 const REQUEST_TIMEOUT_MS = 15000;
+// Backup export/restore move the whole database in one request, and on a
+// serverless host the first call may also pay for a cold start -- give
+// them far more room than a normal 15s API call.
+const BACKUP_TIMEOUT_MS = 60000;
 
-async function request<T>(path: string, options: RequestInit = {}, auth = true): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  auth = true,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
@@ -45,7 +54,7 @@ async function request<T>(path: string, options: RequestInit = {}, auth = true):
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   let resp: Response;
   try {
@@ -94,11 +103,14 @@ export const adminApi = {
     request<{ ok: true; admin: any }>('/admin/profile', { method: 'PATCH', body: JSON.stringify(data) }),
   exportBackup: () =>
     request<{ ok: true; version: string; exportedAt: string; exportedBy: string; system: string; tables: Record<string, unknown[]> }>(
-      '/admin/backup/export'
+      '/admin/backup/export',
+      {},
+      true,
+      BACKUP_TIMEOUT_MS
     ),
   restoreBackup: (payload: string, integrityHash: string) =>
     request<{ ok: true; restoredAt: string; restoredRows: number }>('/admin/backup/restore', {
       method: 'POST',
       body: JSON.stringify({ payload, integrityHash }),
-    }),
+    }, true, BACKUP_TIMEOUT_MS),
 };
