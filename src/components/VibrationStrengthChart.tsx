@@ -57,6 +57,9 @@ interface VibrationStrengthChartProps {
    * fixed y-axis. Newest reading sits at the left edge; scrolling right
    * moves back in time through the points (up to the last 7 days). */
   scrollable?: boolean;
+  /** Overrides the hint line under the scrollable strip (defaults to the
+   * Vibration Events wording, "last 7 days"). */
+  caption?: string;
 }
 
 /**
@@ -72,9 +75,18 @@ export const VibrationStrengthChart: React.FC<VibrationStrengthChartProps> = ({
   xAxisLabel,
   className = '',
   scrollable = false,
+  caption,
 }) => {
   if (scrollable) {
-    return <ScrollableStrengthChart points={points} height={height} xAxisLabel={xAxisLabel} className={className} />;
+    return (
+      <ScrollableStrengthChart
+        points={points}
+        height={height}
+        xAxisLabel={xAxisLabel}
+        className={className}
+        caption={caption}
+      />
+    );
   }
   const rawId = useId();
   const gradId = `vsc-grad-${rawId.replace(/[:]/g, '')}`;
@@ -232,7 +244,8 @@ const ScrollableStrengthChart: React.FC<{
   height: number;
   xAxisLabel?: string;
   className?: string;
-}> = ({ points, height, xAxisLabel, className = '' }) => {
+  caption?: string;
+}> = ({ points, height, xAxisLabel, className = '', caption }) => {
   const rawId = useId().replace(/[:]/g, '');
   const gradId = `vsc-sg-${rawId}`;
   const fillId = `vsc-sf-${rawId}`;
@@ -324,7 +337,7 @@ const ScrollableStrengthChart: React.FC<{
         </div>
       </div>
       <p className="text-[10px] text-[#606060] font-mono mt-1.5 text-center">
-        Latest at left &middot; scroll right for earlier readings (last 7 days)
+        {caption ?? <>Latest at left &middot; scroll right for earlier readings (last 7 days)</>}
       </p>
     </div>
   );

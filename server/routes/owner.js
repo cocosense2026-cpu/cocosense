@@ -912,6 +912,12 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
 // ?tz=<minutes east of UTC> (e.g. 480 for the Philippines) so a reading at
 // 11pm on the 31st lands in the month the owner actually saw it in.
 const REPORT_MAX_MONTHS = 12;
+// The trace sends the strongest reading in every 3-hour window (a device can
+// post several readings a second, so sending them all would be huge). Quiet
+// windows are 0, so the line goes flat like a real seismograph.
+const TRACE_BUCKET_MIN = 180;
+const TRACE_BUCKET_SEC = TRACE_BUCKET_MIN * 60;
+const TRACE_PER_DAY = 1440 / TRACE_BUCKET_MIN;
 
 function sqlTime(ms) {
   return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
@@ -941,7 +947,7 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
        AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
        AND v.timestamp >= ?`;
 
-  const [monthRows, dayRows, piezoRows, nodes] = await Promise.all([
+  const [monthRows, bucketRows, piezoRows, nodes] = await Promise.all([
     db
       .prepare(
         `SELECT strftime('%Y-%m', v.timestamp, ?) AS month,
@@ -954,11 +960,11 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
       .all(modifier, GRAMS_CRITICAL, GRAMS_ELEVATED, GRAMS_CRITICAL, ownerId, cutoff),
     db
       .prepare(
-        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month, CAST(strftime('%d', v.timestamp, ?) AS INTEGER) AS day,
-                COUNT(*) AS readings, MAX(v.grams) AS peak_grams
-           ${base} GROUP BY month, day`
+        `SELECT CAST((CAST(strftime('%s', v.timestamp) AS INTEGER) + CAST(? AS INTEGER)) / CAST(? AS INTEGER) AS INTEGER) AS bucket,
+                MAX(v.grams) AS peak_grams
+           ${base} GROUP BY bucket`
       )
-      .all(modifier, modifier, ownerId, cutoff),
+      .all(tz * 60, TRACE_BUCKET_SEC, ownerId, cutoff),
     db
       .prepare(
         `SELECT strftime('%Y-%m', v.timestamp, ?) AS month, v.piezo_sensor_id AS piezo_id,
@@ -972,6 +978,8 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
 
   const num = (v, digits = 2) => (v == null ? 0 : Number(Number(v).toFixed(digits)));
   const monthsByKey = new Map(monthRows.map((r) => [r.month, r]));
+  const bucketPeaks = new Map(bucketRows.map((r) => [Number(r.bucket), Number(r.peak_grams)]));
+  const nowBucket = Math.floor(Math.floor(localNow.getTime() / 1000) / TRACE_BUCKET_SEC);
   const keys = new Set(monthsByKey.keys());
   keys.add(currentKey); // current month is always shown
   const ordered = [...keys].filter((k) => k <= currentKey).sort().reverse().slice(0, REPORT_MAX_MONTHS);
@@ -985,14 +993,12 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
     const elevated = Number(r?.elevated ?? 0);
     const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-    const dayMap = new Map(
-      dayRows.filter((d) => d.month === key).map((d) => [Number(d.day), d])
-    );
-    const daily = [];
-    for (let d = 1; d <= daysInMonth; d++) {
-      const row = dayMap.get(d);
-      daily.push({ day: d, readings: Number(row?.readings ?? 0), peakGrams: num(row?.peak_grams) });
-    }
+    // Strongest reading per 3-hour window, oldest -> newest. The current month
+    // stops at "now" so the trace ends on the latest window.
+    const startBucket = Math.floor(Date.UTC(y, m - 1, 1) / 1000 / TRACE_BUCKET_SEC);
+    const totalBuckets = daysInMonth * TRACE_PER_DAY;
+    const seriesLen = isCurrent ? Math.max(1, Math.min(totalBuckets, nowBucket - startBucket + 1)) : totalBuckets;
+    const series = Array.from({ length: seriesLen }, (_, i) => num(bucketPeaks.get(startBucket + i)));
 
     const piezos = piezoRows
       .filter((x) => x.month === key)
@@ -1028,7 +1034,11 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
         elevated,
         normal: Math.max(0, readings - critical - elevated),
       },
-      daily,
+      // UTC instant of local midnight on the 1st; point i of `series` is the
+      // window starting startsAt + i * bucketMinutes.
+      startsAt: new Date(Date.UTC(y, m - 1, 1) - tz * 60000).toISOString(),
+      bucketMinutes: TRACE_BUCKET_MIN,
+      series,
       piezos,
     };
   });

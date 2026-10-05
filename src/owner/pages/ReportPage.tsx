@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, FileText, Loader2, Lock, Radio, WifiOff } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
 import { usePolling } from '../../hooks/usePolling';
+import { VibrationStrengthChart, VibrationStrengthPoint } from '../../components/VibrationStrengthChart';
 
 // Month-by-month vibration report (server: GET /owner/reports/vibration).
 //
@@ -14,11 +15,6 @@ import { usePolling } from '../../hooks/usePolling';
 // begins the page simply gets a new top card and the old one slides down.
 // The page re-checks every minute so that happens while it's left open.
 
-interface DayBucket {
-  day: number;
-  readings: number;
-  peakGrams: number;
-}
 interface PiezoRow {
   piezoId: string;
   nodeId: string;
@@ -45,7 +41,11 @@ interface MonthReport {
     elevated: number;
     normal: number;
   };
-  daily: DayBucket[];
+  /** UTC instant of local midnight on the 1st; series[i] starts at startsAt + i * bucketMinutes. */
+  startsAt: string;
+  bucketMinutes: number;
+  /** Strongest reading (g) in each time window, oldest -> newest; 0 = quiet. */
+  series: number[];
   piezos: PiezoRow[];
 }
 interface ReportData {
@@ -110,52 +110,40 @@ const SeverityBar: React.FC<{ totals: MonthReport['totals'] }> = ({ totals }) =>
   );
 };
 
-const DailyChart: React.FC<{ month: MonthReport; thresholds: ReportData['thresholds'] }> = ({
+// Same seismograph-style trace as the Vibration Events page (the shared
+// VibrationStrengthChart in its scrollable mode). Each point is the strongest
+// reading in one time window; quiet windows sit at 0, so the line goes flat.
+const SeismographTrace: React.FC<{ month: MonthReport; thresholds: ReportData['thresholds'] }> = ({
   month,
   thresholds,
 }) => {
-  const CHART_H = 96;
-  const max = Math.max(thresholds.critical, ...month.daily.map((d) => d.peakGrams), 0.1);
-  const colorFor = (g: number) =>
-    g >= thresholds.critical ? COLORS.critical : g >= thresholds.elevated ? COLORS.elevated : COLORS.normal;
+  const points = useMemo<VibrationStrengthPoint[]>(() => {
+    const start = new Date(month.startsAt).getTime();
+    const step = month.bucketMinutes * 60000;
+    return month.series.map((grams, i) => ({
+      grams,
+      timestamp: new Date(start + i * step).toISOString(),
+      severity: grams >= thresholds.critical ? 'Critical' : grams >= thresholds.elevated ? 'Elevated' : 'Normal',
+    }));
+  }, [month.startsAt, month.bucketMinutes, month.series, thresholds.critical, thresholds.elevated]);
 
+  const hours = Math.round(month.bucketMinutes / 60);
   return (
     <div>
       <p className="text-[10px] uppercase font-bold tracking-widest text-[#808080] mb-2">
-        Strongest vibration each day (g)
+        Vibration trace — strongest reading every {hours} hours
       </p>
-      <div className="overflow-x-auto pb-1">
-        <div className="flex items-end gap-[3px] min-w-[420px]" style={{ height: CHART_H }}>
-          {month.daily.map((d) => {
-            const future = month.isCurrent && d.day > month.daysElapsed;
-            const h = d.readings === 0 ? 3 : Math.max(5, Math.round((d.peakGrams / max) * CHART_H));
-            return (
-              <div
-                key={d.day}
-                className="flex-1 rounded-sm"
-                style={{
-                  height: h,
-                  backgroundColor: d.readings === 0 ? '#2A2A2A' : colorFor(d.peakGrams),
-                  opacity: future ? 0.25 : 1,
-                }}
-                title={
-                  future
-                    ? `Day ${d.day}`
-                    : d.readings === 0
-                    ? `Day ${d.day}: no readings`
-                    : `Day ${d.day}: peak ${d.peakGrams} g · ${d.readings} readings`
-                }
-              />
-            );
-          })}
-        </div>
-        <div className="flex gap-[3px] min-w-[420px] mt-1">
-          {month.daily.map((d) => (
-            <span key={d.day} className="flex-1 text-center text-[9px] font-mono text-[#606060]">
-              {d.day === 1 || d.day % 5 === 0 ? d.day : ''}
-            </span>
-          ))}
-        </div>
+      <div className="rounded-lg bg-[#0E0E0E] border border-[#262626]">
+        <VibrationStrengthChart
+          points={points}
+          height={150}
+          scrollable
+          caption={
+            month.isCurrent
+              ? 'Latest at left · scroll right to go back through the month'
+              : 'End of month at left · scroll right to go back to the 1st'
+          }
+        />
       </div>
     </div>
   );
@@ -255,7 +243,7 @@ const MonthCard: React.FC<{
               </div>
 
               <SeverityBar totals={t} />
-              <DailyChart month={month} thresholds={data.thresholds} />
+              <SeismographTrace month={month} thresholds={data.thresholds} />
 
               <div>
                 <p className="text-[10px] uppercase font-bold tracking-widest text-[#808080] mb-2">By sensor</p>
