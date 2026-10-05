@@ -305,6 +305,35 @@ async function initDb() {
   }
 
   if (indexesSql) await db.exec(indexesSql);
+
+  // vibration_rollup is new, so an existing database starts with it empty
+  // even though vibration_events already holds readings. Seed it once from
+  // those (only when completely empty, so this can never double-count
+  // against live ingest) -- afterwards ingest.js keeps it current.
+  try {
+    const have = await client.execute(`SELECT COUNT(*) AS n FROM vibration_rollup`);
+    if (Number(have.rows[0]?.n ?? 0) === 0) {
+      const elevated = Number(process.env.GRAMS_ELEVATED ?? 1.5);
+      const critical = Number(process.env.GRAMS_CRITICAL ?? 5.0);
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO vibration_rollup
+                (piezo_sensor_id, bucket_ts, node_id, readings, grams_sum, grams_peak, hz_sum, hz_n, pests, critical, elevated)
+              SELECT piezo_sensor_id,
+                     (CAST(strftime('%s', timestamp) AS INTEGER) / 900) * 900 AS b,
+                     MAX(node_id), COUNT(*), SUM(grams), MAX(grams),
+                     COALESCE(SUM(frequency_hz), 0), COUNT(frequency_hz),
+                     SUM(COALESCE(pest_likely, 0)),
+                     SUM(CASE WHEN grams >= ? THEN 1 ELSE 0 END),
+                     SUM(CASE WHEN grams >= ? AND grams < ? THEN 1 ELSE 0 END)
+                FROM vibration_events
+               WHERE piezo_sensor_id IS NOT NULL AND node_id IS NOT NULL AND timestamp IS NOT NULL
+               GROUP BY piezo_sensor_id, b`,
+        args: [critical, elevated, critical],
+      });
+    }
+  } catch (err) {
+    console.warn('[db] vibration_rollup backfill skipped:', err.message);
+  }
   console.log(`[db] Ready at ${url}`);
 }
 

@@ -14,6 +14,7 @@ import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
 import { usePolling } from '../../hooks/usePolling';
 import { VibrationStrengthChart } from '../../components/VibrationStrengthChart';
+import { WeekSeries, Thresholds, weekToPoints, weekHasVibration } from '../weekSeries';
 
 interface EventRow {
   id: string | number;
@@ -33,7 +34,11 @@ interface PiezoDetail {
   sensorStatus: string;
   enabled: boolean;
   status: { grams: number; severity: string; sector: string };
+  /** Newest raw readings -- only a fallback if an older server sends no `week`. */
   sparkline: EventRow[];
+  /** Strongest reading in each 15-minute window of the last 7 days. */
+  week?: WeekSeries | null;
+  thresholds?: Thresholds;
   logs: EventRow[];
 }
 
@@ -59,7 +64,9 @@ function relativeTime(iso: string): string {
 // "Piezo N" card on /owner/events. Shows only that sensor's own
 // vibration readings (never mixed with any other piezo) plus its
 // recent log, capped at 10 entries by the backend
-// (GET /owner/events/piezo/:piezoId).
+// (GET /owner/events/piezo/:piezoId). The chart covers the last 7 days:
+// swipe/scroll right to go back through the week -- the server sends the
+// strongest reading in each 15-minute window, so the whole week is there.
 export const PiezoDetailPage: React.FC = () => {
   const { piezoId } = useParams<{ piezoId: string }>();
   const [data, setData] = useState<PiezoDetail | null>(null);
@@ -157,19 +164,38 @@ export const PiezoDetailPage: React.FC = () => {
             >
               {(() => {
                 const placeholderPoints = Array.from({ length: 8 }, () => ({ grams: 0, severity: 'Offline' }));
-                const chartPoints = data.sparkline.length ? data.sparkline : placeholderPoints;
+                // The full 7 days (every window, quiet ones as 0) when the
+                // server sent it; the handful of raw readings otherwise.
+                const weekPoints = data.week ? weekToPoints(data.week, data.thresholds) : [];
+                const chartPoints = weekPoints.length
+                  ? weekPoints
+                  : data.sparkline.length
+                  ? data.sparkline
+                  : placeholderPoints;
+                const noReadingsYet = !data.week && data.sparkline.length === 0;
+                const quietWeek = !!data.week && !weekHasVibration(data.week);
                 return (
                   <div className="space-y-3">
                     <div className="rounded-lg bg-[#0E0E0E] border border-[#262626]">
-                      <VibrationStrengthChart points={chartPoints} height={280} xAxisLabel="Time" scrollable />
+                      <VibrationStrengthChart
+                        points={chartPoints}
+                        height={280}
+                        xAxisLabel="Time"
+                        scrollable
+                        pxPerPoint={weekPoints.length ? 8 : undefined}
+                      />
                     </div>
                     {!data.enabled ? (
                       <div className="flex items-center justify-center gap-1.5 text-[11px] text-[#808080]">
                         <PowerOff className="w-3.5 h-3.5 flex-shrink-0" />
                         {notConnected ? `No piezo wired to ${data.pin} yet` : 'Sensor not working'}
                       </div>
-                    ) : data.sparkline.length === 0 ? (
+                    ) : noReadingsYet ? (
                       <div className="text-center text-[11px] text-[#808080]">No readings recorded yet.</div>
+                    ) : quietWeek ? (
+                      <div className="text-center text-[11px] text-[#808080]">
+                        No vibration recorded by this sensor in the last 7 days.
+                      </div>
                     ) : null}
                   </div>
                 );

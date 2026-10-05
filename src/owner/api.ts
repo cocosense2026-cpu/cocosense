@@ -186,6 +186,35 @@ export const ownerApi = {
   vibrationReport: () =>
     request<any>(`/owner/reports/vibration?tz=${-new Date().getTimezoneOffset()}`),
 
+  // One month of the vibration report as a CSV file (Blob). `month` is the
+  // report card's key, e.g. "2026-08". This is a fetch with the bearer
+  // token rather than a plain <a href>, so it stays behind the owner's login.
+  downloadVibrationReport: async (month: string): Promise<Blob> => {
+    const token = getOwnerToken();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let resp: Response;
+    try {
+      resp = await fetch(
+        `${OWNER_API_BASE}/owner/reports/vibration/export?month=${encodeURIComponent(month)}&tz=${-new Date().getTimezoneOffset()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal }
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new OwnerApiError('The download took too long. Please try again.', 0, 'timeout');
+      }
+      throw new OwnerApiError("Can't reach the CocoSense server. Check your connection and try again.", 0);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (resp.status === 401) setOwnerToken(null);
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null);
+      throw new OwnerApiError(body?.error || `Download failed (${resp.status}).`, resp.status, body?.reason);
+    }
+    return resp.blob();
+  },
+
   piezoEvents: (piezoId: string) => request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}`),
 
   notifications: (filter: string) => request<{ notifications: any[]; activeAlertCount: number }>(

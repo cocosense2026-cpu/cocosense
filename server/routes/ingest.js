@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import { severityForGrams, piezoSensorId, normalizePin, splitNodeAndPin } from '../utils.js';
 import { restampRowHash } from '../hash.js';
 import { notifyOwner } from '../notify.js';
+import { recordReading } from '../rollup.js';
 
 // Alert History is a review queue, not a permanent archive -- capping
 // it keeps the admin/owner UI scrollable and the table from growing
@@ -142,6 +143,21 @@ router.post('/ingest-vibration', async (req, res) => {
     pest_band_ratio ?? null
   );
   await restampRowHash(db, 'vibration_events', 'id', vibrationInsert.lastInsertRowid);
+
+  // The raw table below is only a 10-reading window, so also fold this
+  // reading into the long-term 15-minute rollup -- that is what the week
+  // chart and the monthly report/download are built from. A failure here
+  // must never drop the reading itself, so it is logged and swallowed.
+  try {
+    await recordReading(db, {
+      piezoSensorId: piezoSensorIdValue,
+      nodeId: node_id,
+      grams,
+      pestLikely,
+    });
+  } catch (err) {
+    console.warn('[ingest] rollup update failed:', err.message);
+  }
 
   // Cap raw readings at 10 per sensor -- once a new reading pushes a
   // sensor's count past 10, the oldest one for that sensor is dropped so

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, FileText, Loader2, Lock, Radio, WifiOff } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Download, FileText, Loader2, Lock, Radio, WifiOff } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -14,6 +14,10 @@ import { VibrationStrengthChart, VibrationStrengthPoint } from '../../components
 // derives the months from the readings' timestamps, so when a new month
 // begins the page simply gets a new top card and the old one slides down.
 // The page re-checks every minute so that happens while it's left open.
+//
+// Every month can be downloaded as a CSV (server: GET
+// /owner/reports/vibration/export): a button in the page header for the
+// current month, and one at the top of each month's expanded view.
 
 interface PiezoRow {
   piezoId: string;
@@ -60,6 +64,30 @@ const COLORS = { normal: '#4CAF50', elevated: '#E9A23B', critical: '#F44336' };
 function monthLabel(m: MonthReport): string {
   return new Date(m.year, m.month - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
+
+const DownloadButton: React.FC<{
+  label: string;
+  busy: boolean;
+  disabled?: boolean;
+  title?: string;
+  variant?: 'primary' | 'secondary';
+  onClick: () => void;
+}> = ({ label, busy, disabled, title, variant = 'secondary', onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={busy || disabled}
+    title={title}
+    className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto ${
+      variant === 'primary'
+        ? 'bg-[#16A34A] hover:bg-[#22C55E] text-black'
+        : 'bg-[#1A1A1A] hover:bg-[#222222] border border-[#333333] text-[#E0E0E0]'
+    }`}
+  >
+    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+    {busy ? 'Preparing…' : label}
+  </button>
+);
 
 const StatTile: React.FC<{ label: string; value: string; hint?: string; color?: string }> = ({
   label,
@@ -154,7 +182,11 @@ const MonthCard: React.FC<{
   open: boolean;
   onToggle: () => void;
   data: ReportData;
-}> = ({ month, open, onToggle, data }) => {
+  onDownload: () => void;
+  downloading: boolean;
+  /** Another month's download is already running. */
+  downloadLocked: boolean;
+}> = ({ month, open, onToggle, data, onDownload, downloading, downloadLocked }) => {
   const t = month.totals;
   const multiNode = data.nodesCount > 1;
   const empty = t.readings === 0;
@@ -220,7 +252,23 @@ const MonthCard: React.FC<{
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-4">
+              {/* Download this whole month -- sits at the top of the opened card */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4">
+                <p className="text-[11px] text-[#808080] leading-snug">
+                  {month.isCurrent
+                    ? `${monthLabel(month)} so far — everything recorded up to now.`
+                    : `Full vibration record for ${monthLabel(month)}.`}
+                </p>
+                <DownloadButton
+                  label={`Download ${monthLabel(month)}`}
+                  busy={downloading}
+                  disabled={downloadLocked}
+                  title={`Download the ${monthLabel(month)} vibration report (CSV)`}
+                  onClick={onDownload}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <StatTile label="Readings" value={t.readings.toLocaleString()} hint="all sensors" />
                 <StatTile label="Average strength" value={`${t.avgGrams} g`} hint={`${t.avgFrequencyHz} Hz avg`} />
                 <StatTile
@@ -300,6 +348,10 @@ export const ReportPage: React.FC = () => {
   // months start collapsed so the list stays short.
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const lastCurrentRef = useRef<string | null>(null);
+  // Which month (report key) is being downloaded right now, and the last
+  // download failure, if any.
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     ownerApi
@@ -337,14 +389,72 @@ export const ReportPage: React.FC = () => {
       return next;
     });
 
+  const handleDownload = useCallback(
+    async (key: string) => {
+      if (downloadingKey) return;
+      setDownloadingKey(key);
+      setDownloadError(null);
+      try {
+        const blob = await ownerApi.downloadVibrationReport(key);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cocosense-vibration-report-${key}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        setDownloadError(err instanceof Error ? err.message : 'Could not download the report.');
+      } finally {
+        setDownloadingKey(null);
+      }
+    },
+    [downloadingKey]
+  );
+
+  const currentMonth = data?.months.find((m) => m.isCurrent);
+  const currentEmpty = !currentMonth || currentMonth.totals.readings === 0;
+
   return (
     <div className="space-y-6 sm:space-y-8">
       <PageHero
         eyebrow="Farm Owner Portal"
         subtitle="Monthly Report"
         title="Vibration Report"
-        description="A month-by-month summary of the vibration your sensors picked up. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list, and a fresh month starts at the top."
+        description="A month-by-month summary of the vibration your sensors picked up. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list, and a fresh month starts at the top. Open any month to see its full record, and download it as a spreadsheet."
+        actions={
+          <DownloadButton
+            variant="primary"
+            label="Download current report"
+            busy={!!currentMonth && downloadingKey === currentMonth.key}
+            disabled={!currentMonth || currentEmpty || (!!downloadingKey && downloadingKey !== currentMonth.key)}
+            title={
+              currentEmpty
+                ? 'No vibration readings have been recorded this month yet'
+                : `Download the ${monthLabel(currentMonth!)} vibration report (CSV)`
+            }
+            onClick={() => currentMonth && handleDownload(currentMonth.key)}
+          />
+        }
       />
+
+      {downloadError && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded bg-[#2B1B1B] border border-[#F44336]/30 px-4 py-3 text-xs text-[#F44336]"
+        >
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span className="flex-1">{downloadError}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadError(null)}
+            className="text-[#F44336]/80 hover:text-[#F44336] font-bold"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {error && !data && (
         <div className="flex items-start gap-3 rounded bg-[#2B1B1B] border border-[#F44336]/30 px-4 py-3 text-xs text-[#F44336]">
@@ -362,7 +472,16 @@ export const ReportPage: React.FC = () => {
       {data && (
         <div className="space-y-3">
           {data.months.map((m) => (
-            <MonthCard key={m.key} month={m} open={openKeys.has(m.key)} onToggle={() => toggle(m.key)} data={data} />
+            <MonthCard
+              key={m.key}
+              month={m}
+              open={openKeys.has(m.key)}
+              onToggle={() => toggle(m.key)}
+              data={data}
+              onDownload={() => handleDownload(m.key)}
+              downloading={downloadingKey === m.key}
+              downloadLocked={!!downloadingKey && downloadingKey !== m.key}
+            />
           ))}
           {data.months.length === 1 && (
             <p className="text-[11px] text-[#606060] px-1">
@@ -374,7 +493,7 @@ export const ReportPage: React.FC = () => {
 
       <PageFooterNote
         icon={FileText}
-        text="Months follow your local calendar. Only readings from working sensors are counted, and a month's figures are final once it closes."
+        text="Months follow your local calendar. Only readings from working sensors are counted, and a month's figures are final once it closes. Downloads are CSV files that open in Excel or Google Sheets, with a summary, a per-sensor breakdown and the full log for that month."
       />
     </div>
   );

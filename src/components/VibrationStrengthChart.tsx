@@ -60,6 +60,10 @@ interface VibrationStrengthChartProps {
   /** Overrides the hint line under the scrollable strip (defaults to the
    * Vibration Events wording, "last 7 days"). */
   caption?: string;
+  /** Scrollable mode only: horizontal room given to each point (default
+   * 16). Dense series -- a week of 15-minute windows -- use a smaller value
+   * so the strip stays a sensible length to swipe through. */
+  pxPerPoint?: number;
 }
 
 /**
@@ -76,6 +80,7 @@ export const VibrationStrengthChart: React.FC<VibrationStrengthChartProps> = ({
   className = '',
   scrollable = false,
   caption,
+  pxPerPoint,
 }) => {
   if (scrollable) {
     return (
@@ -85,6 +90,7 @@ export const VibrationStrengthChart: React.FC<VibrationStrengthChartProps> = ({
         xAxisLabel={xAxisLabel}
         className={className}
         caption={caption}
+        pxPerPoint={pxPerPoint}
       />
     );
   }
@@ -245,7 +251,8 @@ const ScrollableStrengthChart: React.FC<{
   xAxisLabel?: string;
   className?: string;
   caption?: string;
-}> = ({ points, height, xAxisLabel, className = '', caption }) => {
+  pxPerPoint?: number;
+}> = ({ points, height, xAxisLabel, className = '', caption, pxPerPoint = PX_PER_POINT }) => {
   const rawId = useId().replace(/[:]/g, '');
   const gradId = `vsc-sg-${rawId}`;
   const fillId = `vsc-sf-${rawId}`;
@@ -271,7 +278,7 @@ const ScrollableStrengthChart: React.FC<{
   const marginBottom = xAxisLabel ? 36 : 22;
   const plotH = height - marginTop - marginBottom;
   const padX = 12;
-  const plotW = Math.max(viewW, ordered.length * PX_PER_POINT + padX * 2);
+  const plotW = Math.max(viewW, ordered.length * pxPerPoint + padX * 2);
   const maxGrams = useMemo(() => niceMax(Math.max(...ordered.map((p) => p.grams), 0)), [ordered]);
 
   const xFor = (i: number) => padX + (ordered.length <= 1 ? 0 : (i / (ordered.length - 1)) * (plotW - padX * 2));

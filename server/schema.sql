@@ -332,10 +332,34 @@ CREATE TABLE IF NOT EXISTS superadmin_activity (
   row_hash            TEXT
 );
 
+-- Long-term vibration history. vibration_events is a rolling window (the
+-- newest 10 readings per sensor -- see routes/ingest.js), so it can never
+-- answer "what happened this week / this month". Every ingested reading is
+-- also folded into one row here per sensor per 15-minute window (peak, sum,
+-- count, severity counts), which is tiny, never needs the raw rows, and is
+-- what the week chart and the monthly report/download read. Quiet windows
+-- have no row. Derived data: rows are only ever upserted by the ingest path
+-- (rollup.js), then pruned once older than the report window.
+CREATE TABLE IF NOT EXISTS vibration_rollup (
+  piezo_sensor_id TEXT    NOT NULL,
+  bucket_ts       INTEGER NOT NULL,  -- unix seconds at the START of the 15-min window
+  node_id         TEXT    NOT NULL,
+  readings        INTEGER NOT NULL DEFAULT 0,
+  grams_sum       REAL    NOT NULL DEFAULT 0,
+  grams_peak      REAL    NOT NULL DEFAULT 0,
+  hz_sum          REAL    NOT NULL DEFAULT 0,
+  hz_n            INTEGER NOT NULL DEFAULT 0,
+  pests           INTEGER NOT NULL DEFAULT 0,
+  critical        INTEGER NOT NULL DEFAULT 0,
+  elevated        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (piezo_sensor_id, bucket_ts)
+) WITHOUT ROWID;
+
 -- ==INDEXES==
 -- (do not remove the marker above -- server/db.js splits the file here
 -- so table migrations can run before indexes reference new columns)
 CREATE INDEX IF NOT EXISTS idx_vibration_events_time ON vibration_events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_vibration_rollup_node_time ON vibration_rollup(node_id, bucket_ts);
 CREATE INDEX IF NOT EXISTS idx_alerts_type_reviewed ON alerts(alert_type, reviewed);
 CREATE INDEX IF NOT EXISTS idx_trees_owner ON monitored_trees(owner_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner ON master_nodes(owner_id);

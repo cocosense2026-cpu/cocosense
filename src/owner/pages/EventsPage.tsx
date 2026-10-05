@@ -6,6 +6,7 @@ import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
 import { usePolling } from '../../hooks/usePolling';
 import { VibrationStrengthChart } from '../../components/VibrationStrengthChart';
+import { WeekSeries, Thresholds, weekToPoints } from '../weekSeries';
 
 interface EventRow {
   id: string | number;
@@ -34,7 +35,10 @@ interface EventPanel {
   sensorStatus: string;
   enabled: boolean;
   status: { grams: number; severity: string; sector: string };
+  /** Newest raw readings -- only a fallback if an older server sends no `week`. */
   sparkline: EventRow[];
+  /** Strongest reading in each hour of the last 7 days. */
+  week?: WeekSeries | null;
   logs: EventRow[];
 }
 
@@ -42,6 +46,7 @@ interface EventsData {
   sort: 'recent' | 'strongest';
   status: { grams: number; severity: string; sector: string };
   sparkline: EventRow[];
+  thresholds?: Thresholds;
   logs: EventRow[];
   panels: EventPanel[];
 }
@@ -162,7 +167,14 @@ export const EventsPage: React.FC = () => {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {panels.map((panel, index) => {
-            const panelBars = panel.sparkline.length ? panel.sparkline : Array(8).fill({ grams: 0, severity: 'Normal' });
+            // Full 7 days (hourly windows) when the server sent it, so the
+            // card's swipe really goes back a week; raw readings otherwise.
+            const weekPoints = panel.week ? weekToPoints(panel.week, data?.thresholds) : [];
+            const panelBars = weekPoints.length
+              ? weekPoints
+              : panel.sparkline.length
+              ? panel.sparkline
+              : Array(8).fill({ grams: 0, severity: 'Normal' });
             const panelStyle = SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
             const PanelStatusIcon = panelStyle.icon;
             const notConnected = panel.sensorStatus === 'NOT_CONNECTED';
@@ -235,7 +247,12 @@ export const EventsPage: React.FC = () => {
                   </div>
                 ) : (
                   <div className="rounded-lg bg-[#0E0E0E] border border-[#262626]">
-                    <VibrationStrengthChart points={panelBars} height={150} scrollable />
+                    <VibrationStrengthChart
+                      points={panelBars}
+                      height={150}
+                      scrollable
+                      pxPerPoint={weekPoints.length ? 12 : undefined}
+                    />
                   </div>
                 )}
 

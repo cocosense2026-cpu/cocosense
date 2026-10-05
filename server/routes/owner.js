@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, applyDerivedNodeHealth, GRAMS_ELEVATED, GRAMS_CRITICAL } from '../utils.js';
+import { weekPeaks } from '../rollup.js';
 import {
   verifyPassword,
   hashPassword,
@@ -718,17 +719,16 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const recentStmt = db.prepare(
     `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY ${orderBy} LIMIT ?`
   );
-  // Chart window: every reading from the last 7 days (capped so a very
-  // chatty sensor can't bloat the response). Falls back to the latest 8
-  // readings when nothing landed this week so the chart is never blank
-  // for a sensor that has older history.
-  const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+  // `sparkline` is just the newest raw readings (vibration_events only
+  // keeps 10 per sensor, so it can never cover a week) -- kept for older
+  // clients. The 7-day scrollable chart reads `week` instead: the
+  // strongest reading in each hour, from the long-term rollup, sent as a
+  // bare number array because this endpoint is polled every 10 seconds
+  // (168 numbers per card, not hundreds of row objects).
   const sparklineStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.timestamp >= ? ORDER BY v.timestamp DESC LIMIT 500`
-  );
-  const sparklineFallbackStmt = db.prepare(
     `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY v.timestamp DESC LIMIT 8`
   );
+  const EVENTS_WEEK_BUCKET_MIN = 60;
 
   const panels = [];
   for (const node of nodes) {
@@ -748,13 +748,15 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     for (const sensor of sensors) {
       const pin = sensor.id.split('-').pop(); // e.g. "MN-COCO-0001-001-A2" -> "A2"
       const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
-      const rows = enabled ? toCamel(await recentStmt.all(sensor.id, limit)) : [];
-      let sparkline = [];
-      if (enabled) {
-        let weekRows = toCamel(await sparklineStmt.all(sensor.id, weekCutoff));
-        if (weekRows.length === 0) weekRows = toCamel(await sparklineFallbackStmt.all(sensor.id));
-        sparkline = weekRows.reverse(); // oldest -> newest
-      }
+      const [rawRows, sparkRows, week] = enabled
+        ? await Promise.all([
+            recentStmt.all(sensor.id, limit),
+            sparklineStmt.all(sensor.id),
+            weekPeaks(db, sensor.id, EVENTS_WEEK_BUCKET_MIN),
+          ])
+        : [[], [], null];
+      const rows = toCamel(rawRows);
+      const sparkline = toCamel(sparkRows).reverse(); // oldest -> newest
       const latest = rows[0] ?? null;
 
       // Label is just "Piezo N" -- each master node always carries the
@@ -780,6 +782,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
           sector: latest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
         },
         sparkline,
+        week,
         logs: rows,
       });
     }
@@ -814,6 +817,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
       sector: combinedLatest?.sector ?? req.ownerRow.sector ?? 'Your Estate',
     },
     sparkline: panels.find((p) => p.enabled)?.sparkline ?? [],
+    thresholds: { elevated: GRAMS_ELEVATED, critical: GRAMS_CRITICAL },
     logs: combinedLogs,
     // New: one entry per piezo transducer (always 4 per master node,
     // A0-A3) the owner has provisioned, each independently
@@ -859,25 +863,21 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
           .all(sensor.id, RECENT_LIMIT)
       )
     : [];
-  // Last 7 days of readings for the scrollable chart (latest 20 if the
-  // week is empty so older history still draws).
-  let sparkline = [];
-  if (enabled) {
-    const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-    let weekRows = toCamel(
-      await db
-        .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 500`)
-        .all(sensor.id, weekCutoff)
-    );
-    if (weekRows.length === 0) {
-      weekRows = toCamel(
+  // The scrollable chart: the strongest reading in every 15-minute window
+  // of the last 7 days, from the long-term rollup. (It used to be the
+  // newest 500 raw rows, but vibration_events only keeps 10 per sensor and
+  // a chatty sensor fills 500 rows in minutes, so "a week" was never a
+  // week.) Sent as a bare number array -- 672 numbers, ~3 KB -- since this
+  // page polls every 10 seconds.
+  const week = enabled ? await weekPeaks(db, sensor.id, 15) : null;
+  // Kept for older clients: the newest raw readings.
+  const sparkline = enabled
+    ? toCamel(
         await db
           .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT 20`)
           .all(sensor.id)
-      );
-    }
-    sparkline = weekRows.reverse();
-  }
+      ).reverse()
+    : [];
   const latest = logs[0] ?? null;
 
   res.json({
@@ -895,6 +895,8 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
       sector: latest?.sector ?? sensor.nodeSector ?? req.ownerRow.sector ?? 'Your Estate',
     },
     sparkline,
+    week,
+    thresholds: { elevated: GRAMS_ELEVATED, critical: GRAMS_CRITICAL },
     logs,
   });
 });
@@ -919,10 +921,6 @@ const TRACE_BUCKET_MIN = 180;
 const TRACE_BUCKET_SEC = TRACE_BUCKET_MIN * 60;
 const TRACE_PER_DAY = 1440 / TRACE_BUCKET_MIN;
 
-function sqlTime(ms) {
-  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
-}
-
 router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
   const ownerId = req.ownerRow.id;
   let tz = parseInt(req.query.tz, 10);
@@ -935,42 +933,46 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
   const currentKey = `${curY}-${String(curM + 1).padStart(2, '0')}`;
   const today = localNow.getUTCDate();
 
-  // Local midnight on the 1st of the oldest month we report, as UTC.
-  const cutoff = sqlTime(Date.UTC(curY, curM - (REPORT_MAX_MONTHS - 1), 1) - tz * 60000);
+  // Local midnight on the 1st of the oldest month we report, as unix seconds.
+  const cutoff = Math.floor((Date.UTC(curY, curM - (REPORT_MAX_MONTHS - 1), 1) - tz * 60000) / 1000);
 
   // Same scoping as the Vibration Events feed: this owner's nodes only,
   // and nothing from a damaged / unwired transducer.
-  const base = `FROM vibration_events v
-      JOIN master_nodes n ON v.node_id = n.id
-      LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
+  // Built from vibration_rollup (15-minute windows, kept ~13 months), NOT
+  // vibration_events -- that table only holds the newest 10 readings per
+  // sensor, so it can't describe a month.
+  const base = `FROM vibration_rollup r
+      JOIN master_nodes n ON r.node_id = n.id
+      LEFT JOIN piezo_sensors p ON r.piezo_sensor_id = p.id
      WHERE n.owner_id = ?
        AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
-       AND v.timestamp >= ?`;
+       AND r.bucket_ts >= ?`;
 
   const [monthRows, bucketRows, piezoRows, nodes] = await Promise.all([
     db
       .prepare(
-        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month,
-                COUNT(*) AS readings, AVG(v.grams) AS avg_grams, MAX(v.grams) AS peak_grams,
-                AVG(v.frequency_hz) AS avg_hz, SUM(COALESCE(v.pest_likely, 0)) AS pests,
-                SUM(CASE WHEN v.grams >= ? THEN 1 ELSE 0 END) AS critical,
-                SUM(CASE WHEN v.grams >= ? AND v.grams < ? THEN 1 ELSE 0 END) AS elevated
+        `SELECT strftime('%Y-%m', r.bucket_ts, 'unixepoch', ?) AS month,
+                SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
+                MAX(r.grams_peak) AS peak_grams,
+                SUM(r.hz_sum) / NULLIF(SUM(r.hz_n), 0) AS avg_hz, SUM(r.pests) AS pests,
+                SUM(r.critical) AS critical, SUM(r.elevated) AS elevated
            ${base} GROUP BY month`
       )
-      .all(modifier, GRAMS_CRITICAL, GRAMS_ELEVATED, GRAMS_CRITICAL, ownerId, cutoff),
+      .all(modifier, ownerId, cutoff),
     db
       .prepare(
-        `SELECT CAST((CAST(strftime('%s', v.timestamp) AS INTEGER) + CAST(? AS INTEGER)) / CAST(? AS INTEGER) AS INTEGER) AS bucket,
-                MAX(v.grams) AS peak_grams
+        `SELECT CAST((r.bucket_ts + CAST(? AS INTEGER)) / CAST(? AS INTEGER) AS INTEGER) AS bucket,
+                MAX(r.grams_peak) AS peak_grams
            ${base} GROUP BY bucket`
       )
       .all(tz * 60, TRACE_BUCKET_SEC, ownerId, cutoff),
     db
       .prepare(
-        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month, v.piezo_sensor_id AS piezo_id,
+        `SELECT strftime('%Y-%m', r.bucket_ts, 'unixepoch', ?) AS month, r.piezo_sensor_id AS piezo_id,
                 MAX(n.id) AS node_id, MAX(n.name) AS node_name,
-                COUNT(*) AS readings, AVG(v.grams) AS avg_grams, MAX(v.grams) AS peak_grams
-           ${base} GROUP BY month, v.piezo_sensor_id`
+                SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
+                MAX(r.grams_peak) AS peak_grams
+           ${base} GROUP BY month, r.piezo_sensor_id`
       )
       .all(modifier, ownerId, cutoff),
     db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(ownerId),
@@ -1051,6 +1053,165 @@ router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
     thresholds: { elevated: GRAMS_ELEVATED, critical: GRAMS_CRITICAL },
     months,
   });
+});
+
+// ---- Report download ----
+// GET /owner/reports/vibration/export?month=2026-08&tz=480  ->  a CSV of
+// that month: summary, per-sensor totals, and the full log (strongest
+// reading in every 15-minute window that had any vibration). Works for the
+// current month (as it stands right now) and for any closed month. It is a
+// fetch with the bearer token, not a plain link, so it needs no signed-URL
+// scheme and stays scoped to this owner exactly like the report above.
+function csvCell(v) {
+  if (v == null) return '';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+  let s = String(v);
+  // Node/sensor names are owner-editable text: stop a name such as
+  // "=HYPERLINK(...)" from running as a formula when opened in Excel.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+const csvLine = (cells) => cells.map(csvCell).join(',');
+
+function utcOffsetLabel(tzMin) {
+  const a = Math.abs(tzMin);
+  return `UTC${tzMin >= 0 ? '+' : '-'}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+}
+// "2026-08-14 09:15" in the owner's local time.
+function localStamp(epochSec, tzMin) {
+  return new Date((epochSec + tzMin * 60) * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
+const r2 = (v) => (v == null ? 0 : Number(Number(v).toFixed(2)));
+
+router.get('/owner/reports/vibration/export', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  let tz = parseInt(req.query.tz, 10);
+  if (!Number.isFinite(tz) || tz < -840 || tz > 840) tz = 0;
+
+  const month = String(req.query.month ?? '');
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+  if (!match) return res.status(400).json({ error: 'Choose a month to download, for example 2026-08.' });
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+
+  const localNow = new Date(Date.now() + tz * 60000);
+  const curY = localNow.getUTCFullYear();
+  const curM = localNow.getUTCMonth();
+  const key = (yy, mm0) => `${yy}-${String(mm0 + 1).padStart(2, '0')}`; // mm0 is 0-based
+  const currentKey = key(curY, curM);
+  const oldest = new Date(Date.UTC(curY, curM - (REPORT_MAX_MONTHS - 1), 1));
+  if (month > currentKey) return res.status(400).json({ error: "That month hasn't started yet." });
+  if (month < key(oldest.getUTCFullYear(), oldest.getUTCMonth())) {
+    return res.status(400).json({ error: `Reports go back ${REPORT_MAX_MONTHS} months.` });
+  }
+  const isCurrent = month === currentKey;
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+  // [start, end) of this local month, as unix seconds.
+  const startSec = Math.floor((Date.UTC(y, m - 1, 1) - tz * 60000) / 1000);
+  const endSec = Math.floor((Date.UTC(y, m, 1) - tz * 60000) / 1000);
+
+  const base = `FROM vibration_rollup r
+      JOIN master_nodes n ON r.node_id = n.id
+      LEFT JOIN piezo_sensors p ON r.piezo_sensor_id = p.id
+     WHERE n.owner_id = ?
+       AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
+       AND r.bucket_ts >= ? AND r.bucket_ts < ?`;
+  const args = [ownerId, startSec, endSec];
+
+  const [totals, sensors, rows, nodes] = await Promise.all([
+    db
+      .prepare(
+        `SELECT SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
+                MAX(r.grams_peak) AS peak_grams, SUM(r.hz_sum) / NULLIF(SUM(r.hz_n), 0) AS avg_hz,
+                SUM(r.pests) AS pests, SUM(r.critical) AS critical, SUM(r.elevated) AS elevated
+           ${base}`
+      )
+      .get(...args),
+    db
+      .prepare(
+        `SELECT r.piezo_sensor_id AS piezo_id, MAX(n.id) AS node_id, MAX(n.name) AS node_name,
+                SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
+                MAX(r.grams_peak) AS peak_grams, SUM(r.pests) AS pests
+           ${base} GROUP BY r.piezo_sensor_id`
+      )
+      .all(...args),
+    db
+      .prepare(
+        `SELECT r.bucket_ts, r.piezo_sensor_id AS piezo_id, n.id AS node_id, n.name AS node_name,
+                r.readings, r.grams_sum, r.grams_peak, r.pests
+           ${base} ORDER BY r.bucket_ts, n.id, r.piezo_sensor_id LIMIT 200000`
+      )
+      .all(...args),
+    db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(ownerId),
+  ]);
+
+  const readings = Number(totals?.readings ?? 0);
+  if (readings === 0) {
+    return res.status(404).json({ error: 'There are no vibration readings in that month to download.' });
+  }
+
+  const sensorLabel = (piezoId) => {
+    const idx = PIEZO_PINS.indexOf(String(piezoId ?? '').split('-').pop());
+    return idx >= 0 ? `Piezo ${idx + 1}` : 'Piezo';
+  };
+  const monthName = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+  const critical = Number(totals.critical ?? 0);
+  const elevated = Number(totals.elevated ?? 0);
+  const avgHz = totals.avg_hz == null ? null : Number(Number(totals.avg_hz).toFixed(1));
+
+  const out = [
+    csvLine(['CocoSense Vibration Report']),
+    csvLine(['Month', monthName]),
+    csvLine(['Status', isCurrent ? `In progress (day ${localNow.getUTCDate()} of ${daysInMonth})` : 'Closed']),
+    csvLine(['Time zone', utcOffsetLabel(tz)]),
+    csvLine(['Generated (local time)', localStamp(Math.floor(Date.now() / 1000), tz)]),
+    csvLine(['Thresholds (g)', `Elevated from ${GRAMS_ELEVATED}`, `Critical from ${GRAMS_CRITICAL}`]),
+    '',
+    csvLine(['SUMMARY']),
+    csvLine(['Readings', readings]),
+    csvLine(['Average strength (g)', r2(totals.avg_grams)]),
+    csvLine(['Peak strength (g)', r2(totals.peak_grams)]),
+    ...(avgHz != null ? [csvLine(['Average frequency (Hz)', avgHz])] : []),
+    csvLine(['Pest signatures', Number(totals.pests ?? 0)]),
+    csvLine(['Critical readings', critical]),
+    csvLine(['Elevated readings', elevated]),
+    csvLine(['Normal readings', Math.max(0, readings - critical - elevated)]),
+    '',
+    csvLine(['BY SENSOR']),
+    csvLine(['Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Pest signatures']),
+    ...sensors
+      .map((s) => ({ ...s, label: sensorLabel(s.piezo_id) }))
+      .sort((a, b) => String(a.node_id).localeCompare(String(b.node_id)) || a.label.localeCompare(b.label))
+      .map((s) => csvLine([s.node_name, s.label, Number(s.readings), r2(s.avg_grams), r2(s.peak_grams), Number(s.pests ?? 0)])),
+    '',
+    csvLine(['VIBRATION LOG - strongest reading in each 15-minute window (quiet windows are left out)']),
+    csvLine(['Local time', 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Severity', 'Pest signatures']),
+    ...rows.map((r) =>
+      csvLine([
+        localStamp(Number(r.bucket_ts), tz),
+        r.node_name,
+        sensorLabel(r.piezo_id),
+        Number(r.readings),
+        r2(Number(r.grams_sum) / Math.max(1, Number(r.readings))),
+        r2(r.grams_peak),
+        severityForGrams(Number(r.grams_peak)),
+        Number(r.pests ?? 0),
+      ])
+    ),
+  ];
+
+  await logActivity(ownerId, 'Downloaded vibration report', monthName);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="cocosense-vibration-report-${month}.csv"`);
+  res.setHeader('Cache-Control', 'no-store');
+  // BOM so Excel opens it as UTF-8; CRLF line endings per the CSV spec.
+  res.send('\uFEFF' + out.join('\r\n') + '\r\n');
 });
 
 // ========== Notifications ==========
