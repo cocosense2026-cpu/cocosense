@@ -33,11 +33,16 @@ function getKey() {
   if (cachedKey) return cachedKey;
   const raw = process.env.BACKUP_FIELD_KEY;
   if (!raw || raw.length !== 64 || !/^[0-9a-f]{64}$/i.test(raw)) {
-    throw new Error(
+    const err = new Error(
       'BACKUP_FIELD_KEY is missing or invalid in server/.env -- set it to a 64-character ' +
       'hex string (32 bytes) before exporting or restoring a backup. Generate one with: ' +
       'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
     );
+    // Lets callers tell "the server isn't configured" apart from "this
+    // file failed to decrypt" (wrong key / tampered), which need very
+    // different messages.
+    err.code = 'BACKUP_KEY_MISSING';
+    throw err;
   }
   cachedKey = Buffer.from(raw, 'hex');
   return cachedKey;

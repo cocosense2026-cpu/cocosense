@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { sha256Hex } from '../hash.js';
+import { sha256Hex, restampRowHash } from '../hash.js';
 import { encryptField, decryptField, transformFields } from '../fieldCrypto.js';
 import { requireAdminAuth } from './admin.js';
 
@@ -86,12 +86,19 @@ const BACKUP_TABLES = Object.keys(TABLE_COLUMNS);
 
 router.get('/admin/backup/export', requireAdminAuth, async (req, res) => {
   const tables = {};
-  for (const table of BACKUP_TABLES) {
-    let rows = await db.prepare(`SELECT ${TABLE_COLUMNS[table].join(', ')} FROM ${table}`).all();
-    if (table === 'farm_owners') {
-      rows = transformFields(rows, FARM_OWNER_PII_FIELDS, encryptField);
+  try {
+    for (const table of BACKUP_TABLES) {
+      let rows = await db.prepare(`SELECT ${TABLE_COLUMNS[table].join(', ')} FROM ${table}`).all();
+      if (table === 'farm_owners') {
+        rows = transformFields(rows, FARM_OWNER_PII_FIELDS, encryptField);
+      }
+      tables[table] = rows;
     }
-    tables[table] = rows;
+  } catch (err) {
+    if (err?.code === 'BACKUP_KEY_MISSING') {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+    throw err;
   }
 
   res.json({
@@ -146,7 +153,10 @@ router.post('/admin/backup/restore', requireAdminAuth, async (req, res) => {
   if (Array.isArray(tables.farm_owners)) {
     try {
       tables.farm_owners = transformFields(tables.farm_owners, FARM_OWNER_PII_FIELDS, decryptField);
-    } catch {
+    } catch (err) {
+      if (err?.code === 'BACKUP_KEY_MISSING') {
+        return res.status(500).json({ ok: false, error: err.message });
+      }
       return res.status(400).json({
         ok: false,
         error: "This backup's farm owner data could not be decrypted -- it may have been edited after export, or was exported with a different BACKUP_FIELD_KEY. Restore refused.",
@@ -154,32 +164,75 @@ router.post('/admin/backup/restore', requireAdminAuth, async (req, res) => {
     }
   }
 
+  // Builds the column/value lists for one row, keeping only columns on
+  // this table's allowlist (see the allowlist comment above) so nothing
+  // from the uploaded file ever reaches the SQL string.
+  const rowParts = (table, row) => {
+    const allowedColumns = new Set(TABLE_COLUMNS[table]);
+    const columns = Object.keys(row).filter((c) => allowedColumns.has(c));
+    const values = columns.map((c) => {
+      const v = row[c];
+      // libSQL's driver rejects plain JS booleans -- every flag
+      // column in schema.sql is already stored as 0/1 anyway.
+      return typeof v === 'boolean' ? (v ? 1 : 0) : v;
+    });
+    return { columns, values };
+  };
+
   let restoredRows = 0;
   await db.exec('BEGIN');
   try {
-    // Children before parents, so no delete ever violates a foreign key
-    // still pointing at a row from a table earlier in BACKUP_TABLES.
+    // 1. Clear every table EXCEPT farm_owners, children before parents,
+    //    so no delete violates a foreign key still pointing at a row
+    //    from a table earlier in BACKUP_TABLES.
     for (const table of [...BACKUP_TABLES].reverse()) {
+      if (table === 'farm_owners') continue;
       await db.prepare(`DELETE FROM ${table}`).run();
     }
-    // Parents before children, mirroring BACKUP_TABLES' own order, so
-    // every INSERT's foreign keys already resolve.
+
+    // 2. Farm owners are NOT bulk-deleted. owner_sessions, owner_settings
+    //    and owner_activity all reference farm_owners with ON DELETE
+    //    CASCADE, so `DELETE FROM farm_owners` silently wiped every
+    //    owner's sessions, settings and activity log -- and re-inserting
+    //    the row afterwards also lost password_hash (deliberately left
+    //    out of the backup), locking every owner out. Instead: delete
+    //    only owners that aren't in the backup (their children were
+    //    already cleared in step 1, so this can't hit a foreign key),
+    //    then upsert the rest in place so credentials and portal data
+    //    on rows that already exist are left untouched.
+    const backupOwners = (Array.isArray(tables.farm_owners) ? tables.farm_owners : [])
+      .filter((r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id !== '');
+    const keepIds = new Set(backupOwners.map((r) => r.id));
+    const existingOwners = await db.prepare('SELECT id FROM farm_owners').all();
+    for (const { id } of existingOwners) {
+      if (!keepIds.has(id)) await db.prepare('DELETE FROM farm_owners WHERE id = ?').run(id);
+    }
+    for (const row of backupOwners) {
+      const { columns, values } = rowParts('farm_owners', row);
+      const placeholders = columns.map(() => '?').join(', ');
+      const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`);
+      const onConflict = updates.length ? `DO UPDATE SET ${updates.join(', ')}` : 'DO NOTHING';
+      await db
+        .prepare(`INSERT INTO farm_owners (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(id) ${onConflict}`)
+        .run(...values);
+      // The exported row_hash covers only the backed-up columns, but the
+      // live row also carries credential columns that were preserved (or
+      // are NULL for an owner who didn't exist yet), so re-fingerprint
+      // the row as it now actually sits in the database.
+      await restampRowHash(db, 'farm_owners', 'id', row.id);
+      restoredRows += 1;
+    }
+
+    // 3. Everything else: plain INSERTs, parents before children,
+    //    mirroring BACKUP_TABLES' own order so every foreign key resolves.
     for (const table of BACKUP_TABLES) {
-      const allowedColumns = new Set(TABLE_COLUMNS[table]);
-      const rows = tables[table] || []; // farm_owners' PII is already decrypted above
+      if (table === 'farm_owners') continue;
+      const rows = tables[table] || [];
       for (const row of rows) {
-        // Only ever insert columns this table's allowlist names -- any
-        // other key present on the row is silently dropped instead of
-        // ever reaching the SQL string (see the allowlist comment above).
-        const columns = Object.keys(row).filter((c) => allowedColumns.has(c));
+        if (!row || typeof row !== 'object') continue;
+        const { columns, values } = rowParts(table, row);
         if (columns.length === 0) continue;
         const placeholders = columns.map(() => '?').join(', ');
-        const values = columns.map((c) => {
-          const v = row[c];
-          // libSQL's driver rejects plain JS booleans -- every flag
-          // column in schema.sql is already stored as 0/1 anyway.
-          return typeof v === 'boolean' ? (v ? 1 : 0) : v;
-        });
         await db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...values);
         restoredRows += 1;
       }

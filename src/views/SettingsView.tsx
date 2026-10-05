@@ -169,6 +169,13 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
+    if (parsed && parsed.cocosense_encrypted === true) {
+      setRestoreError(
+        'This is a password-locked report export (*.locked.json), not a system backup. Use the "Export System Backup" file (cocosense-system-backup.json) here instead.'
+      );
+      return;
+    }
+
     const { integrityHash, ...rest } = parsed || {};
     if (typeof integrityHash !== 'string' || !integrityHash.startsWith('sha256:')) {
       setRestoreError('This file has no CocoSense integrity hash -- it was not produced by "Export System Backup".');

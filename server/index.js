@@ -1,4 +1,10 @@
-import 'dotenv/config';
+// Must stay first. `import 'dotenv/config'` only looks for a .env in the
+// directory Node was launched from, but this project's .env lives in
+// server/ while `npm run server` runs from the project root -- so none of
+// server/.env (including BACKUP_FIELD_KEY) was being loaded, and every
+// system backup export/restore failed. load-env.js resolves the path
+// relative to itself instead.
+import './load-env.js';
 import express from 'express';
 // Patches Express so errors thrown/rejected inside async route handlers
 // and middleware (e.g. requireOwnerAuth, requireAdminAuth) are caught
