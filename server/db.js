@@ -101,6 +101,20 @@ export const db = {
     };
   },
 
+  // Runs many statements as ONE atomic transaction in a SINGLE network
+  // round trip. `statements` is an array of [sql, argsArray]. The
+  // interactive BEGIN/COMMIT path above costs one round trip per
+  // statement, which is fine for a handful of writes but far too slow for
+  // a full-system restore (thousands of rows) on a serverless host: the
+  // function hits Netlify's execution limit and the browser sees a 504.
+  async batch(statements) {
+    if (!statements.length) return [];
+    return client.batch(
+      statements.map(([sql, args = []]) => ({ sql, args })),
+      'write'
+    );
+  },
+
   // Mirrors node:sqlite's db.exec(): runs a raw statement or a
   // multi-statement script. Also doubles as the transaction control
   // surface, since the route files already call db.exec('BEGIN') /

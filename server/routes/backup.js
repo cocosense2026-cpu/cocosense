@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { sha256Hex, restampRowHash } from '../hash.js';
+import { sha256Hex, rowHash } from '../hash.js';
 import { encryptField, decryptField, transformFields } from '../fieldCrypto.js';
 import { requireAdminAuth } from './admin.js';
 
@@ -187,68 +187,82 @@ router.post('/admin/backup/restore', requireAdminAuth, async (req, res) => {
     return { columns, values };
   };
 
+  // Every write below is queued into ONE list and sent to the database as
+  // a single atomic batch (one network round trip), instead of awaiting
+  // each DELETE/INSERT separately inside an interactive transaction. With
+  // thousands of rows that per-statement round trip is what pushed this
+  // route past Netlify's function time limit (504). A batch is still
+  // all-or-nothing: if any statement fails, nothing is changed.
+  const statements = [];
   let restoredRows = 0;
-  await db.exec('BEGIN');
-  try {
-    // 1. Clear every table EXCEPT farm_owners, children before parents,
-    //    so no delete violates a foreign key still pointing at a row
-    //    from a table earlier in BACKUP_TABLES.
-    for (const table of [...BACKUP_TABLES].reverse()) {
-      if (table === 'farm_owners') continue;
-      await db.prepare(`DELETE FROM ${table}`).run();
-    }
 
-    // 2. Farm owners are NOT bulk-deleted. owner_sessions, owner_settings
-    //    and owner_activity all reference farm_owners with ON DELETE
-    //    CASCADE, so `DELETE FROM farm_owners` silently wiped every
-    //    owner's sessions, settings and activity log -- and re-inserting
-    //    the row afterwards also lost password_hash (deliberately left
-    //    out of the backup), locking every owner out. Instead: delete
-    //    only owners that aren't in the backup (their children were
-    //    already cleared in step 1, so this can't hit a foreign key),
-    //    then upsert the rest in place so credentials and portal data
-    //    on rows that already exist are left untouched.
-    const backupOwners = (Array.isArray(tables.farm_owners) ? tables.farm_owners : [])
-      .filter((r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id !== '');
-    const keepIds = new Set(backupOwners.map((r) => r.id));
-    const existingOwners = await db.prepare('SELECT id FROM farm_owners').all();
-    for (const { id } of existingOwners) {
-      if (!keepIds.has(id)) await db.prepare('DELETE FROM farm_owners WHERE id = ?').run(id);
-    }
-    for (const row of backupOwners) {
-      const { columns, values } = rowParts('farm_owners', row);
+  // 1. Clear every table EXCEPT farm_owners, children before parents, so
+  //    no delete violates a foreign key still pointing at a row from a
+  //    table earlier in BACKUP_TABLES.
+  for (const table of [...BACKUP_TABLES].reverse()) {
+    if (table === 'farm_owners') continue;
+    statements.push([`DELETE FROM ${table}`, []]);
+  }
+
+  // 2. Farm owners are NOT bulk-deleted. owner_sessions, owner_settings
+  //    and owner_activity all reference farm_owners with ON DELETE
+  //    CASCADE, so `DELETE FROM farm_owners` silently wiped every owner's
+  //    sessions, settings and activity log -- and re-inserting the row
+  //    afterwards also lost password_hash (deliberately left out of the
+  //    backup), locking every owner out. Instead: delete only owners that
+  //    aren't in the backup, then upsert the rest in place so credentials
+  //    and portal data on rows that already exist are left untouched.
+  const backupOwners = (Array.isArray(tables.farm_owners) ? tables.farm_owners : [])
+    .filter((r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id !== '');
+  const keepIds = new Set(backupOwners.map((r) => r.id));
+  const existingOwners = await db.prepare('SELECT id FROM farm_owners').all();
+  for (const { id } of existingOwners) {
+    if (!keepIds.has(id)) statements.push(['DELETE FROM farm_owners WHERE id = ?', [id]]);
+  }
+  for (const row of backupOwners) {
+    const { columns, values } = rowParts('farm_owners', row);
+    const placeholders = columns.map(() => '?').join(', ');
+    const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`);
+    const onConflict = updates.length ? `DO UPDATE SET ${updates.join(', ')}` : 'DO NOTHING';
+    statements.push([
+      `INSERT INTO farm_owners (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(id) ${onConflict}`,
+      values,
+    ]);
+    restoredRows += 1;
+  }
+
+  // 3. Everything else: plain INSERTs, parents before children, mirroring
+  //    BACKUP_TABLES' own order so every foreign key resolves.
+  for (const table of BACKUP_TABLES) {
+    if (table === 'farm_owners') continue;
+    const rows = tables[table] || [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const { columns, values } = rowParts(table, row);
+      if (columns.length === 0) continue;
       const placeholders = columns.map(() => '?').join(', ');
-      const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`);
-      const onConflict = updates.length ? `DO UPDATE SET ${updates.join(', ')}` : 'DO NOTHING';
-      await db
-        .prepare(`INSERT INTO farm_owners (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(id) ${onConflict}`)
-        .run(...values);
-      // The exported row_hash covers only the backed-up columns, but the
-      // live row also carries credential columns that were preserved (or
-      // are NULL for an owner who didn't exist yet), so re-fingerprint
-      // the row as it now actually sits in the database.
-      await restampRowHash(db, 'farm_owners', 'id', row.id);
+      statements.push([`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`, values]);
       restoredRows += 1;
     }
+  }
 
-    // 3. Everything else: plain INSERTs, parents before children,
-    //    mirroring BACKUP_TABLES' own order so every foreign key resolves.
-    for (const table of BACKUP_TABLES) {
-      if (table === 'farm_owners') continue;
-      const rows = tables[table] || [];
-      for (const row of rows) {
-        if (!row || typeof row !== 'object') continue;
-        const { columns, values } = rowParts(table, row);
-        if (columns.length === 0) continue;
-        const placeholders = columns.map(() => '?').join(', ');
-        await db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...values);
-        restoredRows += 1;
-      }
+  await db.batch(statements);
+
+  // 4. Re-fingerprint the restored farm owners. The exported row_hash
+  //    covers only the backed-up columns, but the live row also carries
+  //    credential columns that were preserved (or are NULL for an owner
+  //    who didn't exist yet), so the hash must be recomputed from the row
+  //    as it now sits in the database. Done with ONE read and ONE batched
+  //    write instead of a read+write round trip per owner.
+  if (backupOwners.length) {
+    const liveOwners = await db.prepare('SELECT * FROM farm_owners').all();
+    const restamp = [];
+    for (const live of liveOwners) {
+      if (!keepIds.has(live.id)) continue;
+      const { row_hash, ...fields } = live;
+      restamp.push(['UPDATE farm_owners SET row_hash = ? WHERE id = ?', [rowHash(fields), live.id]]);
     }
-    await db.exec('COMMIT');
-  } catch (err) {
-    await db.exec('ROLLBACK');
-    throw err;
+    await db.batch(restamp);
   }
 
   res.json({ ok: true, restoredAt: new Date().toISOString(), restoredRows });
