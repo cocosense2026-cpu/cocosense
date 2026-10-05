@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
-import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, applyDerivedNodeHealth } from '../utils.js';
+import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, applyDerivedNodeHealth, GRAMS_ELEVATED, GRAMS_CRITICAL } from '../utils.js';
 import {
   verifyPassword,
   hashPassword,
@@ -896,6 +896,150 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
     },
     sparkline,
     logs,
+  });
+});
+
+// ========== Monthly vibration report (owner-scoped) ==========
+// One entry per calendar month, newest first. The CURRENT month is always
+// first (even before its first reading lands) and is flagged isCurrent;
+// every earlier month that has readings follows below it. Nothing is
+// stored or "rolled over" by a job -- months are derived from the readings'
+// timestamps on every request, so the instant a new month begins the old
+// one becomes a closed entry lower in the list and a fresh one takes the
+// top spot.
+//
+// Months are cut in the owner's own timezone, not UTC: the client sends
+// ?tz=<minutes east of UTC> (e.g. 480 for the Philippines) so a reading at
+// 11pm on the 31st lands in the month the owner actually saw it in.
+const REPORT_MAX_MONTHS = 12;
+
+function sqlTime(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+router.get('/owner/reports/vibration', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  let tz = parseInt(req.query.tz, 10);
+  if (!Number.isFinite(tz) || tz < -840 || tz > 840) tz = 0;
+  const modifier = `${tz >= 0 ? '+' : '-'}${Math.abs(tz)} minutes`;
+
+  const localNow = new Date(Date.now() + tz * 60000);
+  const curY = localNow.getUTCFullYear();
+  const curM = localNow.getUTCMonth(); // 0-based
+  const currentKey = `${curY}-${String(curM + 1).padStart(2, '0')}`;
+  const today = localNow.getUTCDate();
+
+  // Local midnight on the 1st of the oldest month we report, as UTC.
+  const cutoff = sqlTime(Date.UTC(curY, curM - (REPORT_MAX_MONTHS - 1), 1) - tz * 60000);
+
+  // Same scoping as the Vibration Events feed: this owner's nodes only,
+  // and nothing from a damaged / unwired transducer.
+  const base = `FROM vibration_events v
+      JOIN master_nodes n ON v.node_id = n.id
+      LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
+     WHERE n.owner_id = ?
+       AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
+       AND v.timestamp >= ?`;
+
+  const [monthRows, dayRows, piezoRows, nodes] = await Promise.all([
+    db
+      .prepare(
+        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month,
+                COUNT(*) AS readings, AVG(v.grams) AS avg_grams, MAX(v.grams) AS peak_grams,
+                AVG(v.frequency_hz) AS avg_hz, SUM(COALESCE(v.pest_likely, 0)) AS pests,
+                SUM(CASE WHEN v.grams >= ? THEN 1 ELSE 0 END) AS critical,
+                SUM(CASE WHEN v.grams >= ? AND v.grams < ? THEN 1 ELSE 0 END) AS elevated
+           ${base} GROUP BY month`
+      )
+      .all(modifier, GRAMS_CRITICAL, GRAMS_ELEVATED, GRAMS_CRITICAL, ownerId, cutoff),
+    db
+      .prepare(
+        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month, CAST(strftime('%d', v.timestamp, ?) AS INTEGER) AS day,
+                COUNT(*) AS readings, MAX(v.grams) AS peak_grams
+           ${base} GROUP BY month, day`
+      )
+      .all(modifier, modifier, ownerId, cutoff),
+    db
+      .prepare(
+        `SELECT strftime('%Y-%m', v.timestamp, ?) AS month, v.piezo_sensor_id AS piezo_id,
+                MAX(n.id) AS node_id, MAX(n.name) AS node_name,
+                COUNT(*) AS readings, AVG(v.grams) AS avg_grams, MAX(v.grams) AS peak_grams
+           ${base} GROUP BY month, v.piezo_sensor_id`
+      )
+      .all(modifier, ownerId, cutoff),
+    db.prepare(`SELECT COUNT(*) AS n FROM master_nodes WHERE owner_id = ?`).get(ownerId),
+  ]);
+
+  const num = (v, digits = 2) => (v == null ? 0 : Number(Number(v).toFixed(digits)));
+  const monthsByKey = new Map(monthRows.map((r) => [r.month, r]));
+  const keys = new Set(monthsByKey.keys());
+  keys.add(currentKey); // current month is always shown
+  const ordered = [...keys].filter((k) => k <= currentKey).sort().reverse().slice(0, REPORT_MAX_MONTHS);
+
+  const months = ordered.map((key) => {
+    const [y, m] = key.split('-').map(Number);
+    const isCurrent = key === currentKey;
+    const r = monthsByKey.get(key);
+    const readings = Number(r?.readings ?? 0);
+    const critical = Number(r?.critical ?? 0);
+    const elevated = Number(r?.elevated ?? 0);
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+    const dayMap = new Map(
+      dayRows.filter((d) => d.month === key).map((d) => [Number(d.day), d])
+    );
+    const daily = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const row = dayMap.get(d);
+      daily.push({ day: d, readings: Number(row?.readings ?? 0), peakGrams: num(row?.peak_grams) });
+    }
+
+    const piezos = piezoRows
+      .filter((x) => x.month === key)
+      .map((x) => {
+        const pin = String(x.piezo_id ?? '').split('-').pop();
+        const idx = PIEZO_PINS.indexOf(pin);
+        return {
+          piezoId: x.piezo_id,
+          nodeId: x.node_id,
+          nodeName: x.node_name,
+          label: idx >= 0 ? `Piezo ${idx + 1}` : 'Piezo',
+          readings: Number(x.readings),
+          avgGrams: num(x.avg_grams),
+          peakGrams: num(x.peak_grams),
+        };
+      })
+      .sort((a, b) => String(a.nodeId).localeCompare(String(b.nodeId)) || a.label.localeCompare(b.label));
+
+    return {
+      key,
+      year: y,
+      month: m,
+      isCurrent,
+      daysInMonth,
+      daysElapsed: isCurrent ? today : daysInMonth,
+      totals: {
+        readings,
+        avgGrams: num(r?.avg_grams),
+        peakGrams: num(r?.peak_grams),
+        avgFrequencyHz: num(r?.avg_hz, 1),
+        pestDetections: Number(r?.pests ?? 0),
+        critical,
+        elevated,
+        normal: Math.max(0, readings - critical - elevated),
+      },
+      daily,
+      piezos,
+    };
+  });
+
+  res.json({
+    ok: true,
+    serverTime: new Date().toISOString(),
+    currentMonth: currentKey,
+    nodesCount: Number(nodes?.n ?? 0),
+    thresholds: { elevated: GRAMS_ELEVATED, critical: GRAMS_CRITICAL },
+    months,
   });
 });
 

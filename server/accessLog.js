@@ -64,6 +64,7 @@ const STATIC_PAGES = {
   '/owner': 'Dashboard',
   '/owner/notifications': 'Notifications',
   '/owner/events': 'Vibration Events',
+  '/owner/report': 'Vibration Report',
   '/owner/nodes': 'Master Node Mesh',
   '/owner/profile': 'Profile',
   '/owner/settings': 'Settings',

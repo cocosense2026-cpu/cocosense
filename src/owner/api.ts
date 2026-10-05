@@ -181,6 +181,11 @@ export const ownerApi = {
 
   events: (sort: 'recent' | 'strongest') => request<any>(`/owner/events?sort=${sort}`),
 
+  // Month-by-month vibration report. tz = minutes EAST of UTC so the server
+  // cuts months at the owner's local midnight, not UTC's.
+  vibrationReport: () =>
+    request<any>(`/owner/reports/vibration?tz=${-new Date().getTimezoneOffset()}`),
+
   piezoEvents: (piezoId: string) => request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}`),
 
   notifications: (filter: string) => request<{ notifications: any[]; activeAlertCount: number }>(
