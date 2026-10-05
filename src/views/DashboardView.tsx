@@ -3,6 +3,7 @@ import { MonitoredTree, FarmOwner, MasterNode, PestAlert, VibrationEvent } from 
 import { FarmOwnersMap } from '../components/FarmOwnersMap';
 import { BrandLogo } from '../components/BrandLogo';
 import { PestVisualizer } from '../components/PestVisualizer';
+import { DashboardRecentActivity } from '../components/DashboardRecentActivity';
 import { 
   Activity, 
   AlertTriangle, 
@@ -260,6 +261,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-[#808080]">Sampling: <strong className="text-white font-mono">1,000 Hz</strong></span>
             </div>
           </div>
+
+          {/* Recent owner activity: everyone who has opened their system (max 10, scrolls) */}
+          <DashboardRecentActivity onNavigate={onNavigate} />
 
           {/* Quick Farm Owners Summary */}
           <div className="rounded-xl bg-[#141414] border border-[#262626] p-5 shadow-xl space-y-3">

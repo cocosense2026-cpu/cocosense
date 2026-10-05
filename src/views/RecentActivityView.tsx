@@ -10,9 +10,11 @@ import {
   Play,
   Radio,
   RefreshCw,
+  Search,
   UserPlus,
   Users,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { PageHero } from '../components/PageHero';
 import { Avatar } from '../components/Avatar';
@@ -218,11 +220,12 @@ const FeedPanel: React.FC<{
   now: number;
   freshIds: Set<string>;
   kindFilter: ActivityKind | null;
+  searching?: boolean;
   onKindFilter: (k: ActivityKind | null) => void;
   showOwner: boolean;
   onOpenOwner: (id: string) => void;
   onLoadMore: () => void;
-}> = ({ title, items, loading, hasMore, now, freshIds, kindFilter, onKindFilter, showOwner, onOpenOwner, onLoadMore }) => (
+}> = ({ title, items, loading, hasMore, now, freshIds, kindFilter, searching, onKindFilter, showOwner, onOpenOwner, onLoadMore }) => (
   <section className="rounded bg-[#141414] border border-[#262626] overflow-hidden">
     <div className="px-4 py-3 border-b border-[#262626] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <h2 className="text-xs font-bold uppercase tracking-widest text-white flex items-center gap-2">
@@ -257,9 +260,11 @@ const FeedPanel: React.FC<{
     ) : items.length === 0 ? (
       <div className="p-10 text-center">
         <Radio className="w-9 h-9 text-[#808080]/40 mx-auto mb-3" />
-        <h3 className="font-bold text-white text-sm">No activity yet</h3>
+        <h3 className="font-bold text-white text-sm">{searching ? 'No matching activity' : 'No activity yet'}</h3>
         <p className="text-xs text-[#808080] mt-1">
-          Events appear here the moment an owner opens a page or does something in their portal.
+          {searching
+            ? 'Nothing matches your search. Try a different name, page or action.'
+            : 'Events appear here the moment an owner opens a page or does something in their portal.'}
         </p>
       </div>
     ) : (
@@ -297,6 +302,8 @@ export const RecentActivityView: React.FC = () => {
   const [tab, setTab] = useState<Tab>('all');
   const [kindFilter, setKindFilter] = useState<ActivityKind | null>(null);
   const [limit, setLimit] = useState(PAGE_SIZE);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState(''); // debounced value actually sent to the server
   const [paused, setPaused] = useState(false);
 
   const [owners, setOwners] = useState<OwnerActivitySummary[]>([]);
@@ -308,6 +315,21 @@ export const RecentActivityView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
+  // Debounce typing so every keystroke doesn't fire a request.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setSearch((prev) => {
+        const next = searchInput.trim();
+        if (next !== prev) {
+          setLimit(PAGE_SIZE);
+          setFeedLoading(true);
+        }
+        return next;
+      });
+    }, 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   // Ticks every 10s so "2m ago" labels keep moving between fetches.
   const [now, setNow] = useState(() => Date.now());
@@ -352,7 +374,7 @@ export const RecentActivityView: React.FC = () => {
     try {
       const [ownersRes, feedRes, detailRes] = await Promise.all([
         adminApi.activityOwners(),
-        adminApi.activityFeed({ ownerId: tab === 'all' ? null : tab, kind: kindFilter, limit }),
+        adminApi.activityFeed({ ownerId: tab === 'all' ? null : tab, kind: kindFilter, q: search, limit }),
         tab === 'all' ? Promise.resolve(null) : adminApi.activityOwner(tab).catch(() => null),
       ]);
       if (requestId !== requestRef.current) return;
@@ -362,7 +384,7 @@ export const RecentActivityView: React.FC = () => {
       setFeed(feedRes.items);
       setHasMore(feedRes.hasMore);
       setDetail(detailRes ? { owner: detailRes.owner, topPages: detailRes.topPages, last7Days: detailRes.last7Days } : null);
-      flagFresh(feedRes.items, `${tab}|${kindFilter ?? ''}`);
+      flagFresh(feedRes.items, `${tab}|${kindFilter ?? ''}|${search}`);
       setError(null);
       setLastUpdated(Date.now());
       setNow(Date.now());
@@ -375,7 +397,7 @@ export const RecentActivityView: React.FC = () => {
         setRefreshing(false);
       }
     }
-  }, [tab, kindFilter, limit, flagFresh]);
+  }, [tab, kindFilter, search, limit, flagFresh]);
 
   // Fetch immediately whenever the tab / filter / page size changes...
   useEffect(() => {
@@ -415,6 +437,12 @@ export const RecentActivityView: React.FC = () => {
   const awayCount = owners.filter((o) => o.presence === 'away').length;
   const opens24h = owners.reduce((sum, o) => sum + o.opens24h, 0);
   const actions24h = owners.reduce((sum, o) => sum + o.actions24h, 0);
+  const q = searchInput.trim().toLowerCase();
+  const visibleOwners = q
+    ? owners.filter((o) =>
+        [o.name, o.id, o.email, o.sector].some((v) => (v ?? '').toLowerCase().includes(q))
+      )
+    : owners;
   const selectedOwner = tab === 'all' ? null : owners.find((o) => o.id === tab) ?? null;
 
   return (
@@ -460,6 +488,33 @@ export const RecentActivityView: React.FC = () => {
         <StatTile label="Actions taken" value={actions24h} hint="last 24 hours" />
       </div>
 
+      {/* Search across owners and their activity */}
+      <div className="relative">
+        <Search className="w-4 h-4 text-[#808080] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder={
+            tab === 'all'
+              ? 'Search by owner, page, action or detail…'
+              : `Search ${selectedOwner?.name ?? "this owner"}'s activity…`
+          }
+          aria-label="Search recent activity"
+          className="w-full rounded bg-[#141414] border border-[#262626] focus:border-[#D4AF37]/50 outline-none pl-10 pr-10 py-2.5 text-xs text-white placeholder:text-[#606060] transition-colors"
+        />
+        {searchInput && (
+          <button
+            type="button"
+            onClick={() => setSearchInput('')}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded text-[#808080] hover:text-white transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Sub-navigation: All owners + one tab per registered owner */}
       <nav
         aria-label="Activity by owner"
@@ -483,7 +538,7 @@ export const RecentActivityView: React.FC = () => {
 
         <span className="w-px bg-[#262626] mx-1 flex-shrink-0" />
 
-        {owners.map((o) => (
+        {owners.filter((o) => o.id === tab || visibleOwners.includes(o)).map((o) => (
           <button
             key={o.id}
             type="button"
@@ -508,14 +563,17 @@ export const RecentActivityView: React.FC = () => {
         {ownersLoaded && owners.length === 0 && (
           <span className="px-3 py-2 text-xs text-[#808080]">No farm owners registered yet.</span>
         )}
+        {ownersLoaded && owners.length > 0 && visibleOwners.length === 0 && tab === 'all' && (
+          <span className="px-3 py-2 text-xs text-[#808080]">No owners match "{searchInput.trim()}".</span>
+        )}
       </nav>
 
       {tab === 'all' ? (
         <>
           {/* One card per owner -- their own live part of the page */}
-          {owners.length > 0 && (
+          {visibleOwners.length > 0 && (
             <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {owners.map((o) => (
+              {visibleOwners.map((o) => (
                 <button
                   key={o.id}
                   type="button"
@@ -571,6 +629,7 @@ export const RecentActivityView: React.FC = () => {
             now={now}
             freshIds={freshIds}
             kindFilter={kindFilter}
+            searching={search !== ''}
             onKindFilter={selectKind}
             showOwner
             onOpenOwner={selectTab}
@@ -671,6 +730,7 @@ export const RecentActivityView: React.FC = () => {
               now={now}
               freshIds={freshIds}
               kindFilter={kindFilter}
+              searching={search !== ''}
               onKindFilter={selectKind}
               showOwner={false}
               onOpenOwner={selectTab}

@@ -6,7 +6,7 @@
 //   GET /admin/activity/summary        headline numbers for the stat strip
 //   GET /admin/activity/owners         one presence/summary row per owner
 //   GET /admin/activity/owners/:id     one owner's summary + 7-day trend
-//   GET /admin/activity/feed           merged event feed (all owners, or ?ownerId=)
+//   GET /admin/activity/feed           merged event feed (?ownerId=, ?kind=, ?q= search)
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAdminAuth } from './admin.js';
@@ -219,6 +219,7 @@ router.get('/admin/activity/feed', requireAdminAuth, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
   const ownerId = typeof req.query.ownerId === 'string' && req.query.ownerId ? req.query.ownerId : null;
   const kind = FEED_KINDS.includes(req.query.kind) ? req.query.kind : null;
+  const search = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
 
   const conditions = [`f.owner_id IS NOT NULL`, `f.created_at >= datetime('now', '-30 days')`];
   const args = [];
@@ -229,6 +230,17 @@ router.get('/admin/activity/feed', requireAdminAuth, async (req, res) => {
   if (kind) {
     conditions.push('f.kind = ?');
     args.push(kind);
+  }
+
+  // Free-text search over who / what / detail. '!' is the LIKE escape so a
+  // typed % or _ is matched literally instead of acting as a wildcard.
+  if (search) {
+    const like = `%${search.replace(/[!%_]/g, '!$&')}%`;
+    conditions.push(
+      `(o.name LIKE ? ESCAPE '!' OR f.owner_id LIKE ? ESCAPE '!' OR f.action LIKE ? ESCAPE '!'
+        OR f.detail LIKE ? ESCAPE '!' OR f.meta LIKE ? ESCAPE '!')`
+    );
+    args.push(like, like, like, like, like);
   }
 
   const rows = await db

@@ -151,10 +151,11 @@ export const adminApi = {
     request<{ ok: true; serverTime: string; owners: OwnerActivitySummary[] }>('/admin/activity/owners'),
   activityOwner: (ownerId: string) =>
     request<{ ok: true } & OwnerActivityDetail>(`/admin/activity/owners/${encodeURIComponent(ownerId)}`),
-  activityFeed: (opts: { ownerId?: string | null; kind?: ActivityKind | null; limit?: number } = {}) => {
+  activityFeed: (opts: { ownerId?: string | null; kind?: ActivityKind | null; q?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (opts.ownerId) q.set('ownerId', opts.ownerId);
     if (opts.kind) q.set('kind', opts.kind);
+    if (opts.q && opts.q.trim()) q.set('q', opts.q.trim());
     q.set('limit', String(opts.limit ?? 50));
     return request<{ ok: true; serverTime: string; items: ActivityItem[]; hasMore: boolean }>(
       `/admin/activity/feed?${q.toString()}`
