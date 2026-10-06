@@ -213,39 +213,9 @@ export const ownerApi = {
     }),
   activateTree: (id: number) => request<{ ok: true; tree: any }>(`/owner/trees/${id}/activate`, { method: 'POST' }),
 
-  // Month-by-month vibration report. tz = minutes EAST of UTC so the server
-  // cuts months at the owner's local midnight, not UTC's.
-  vibrationReport: () =>
-    request<any>(`/owner/reports/vibration?tz=${-new Date().getTimezoneOffset()}`),
-
-  // One month of the vibration report as a CSV file (Blob). `month` is the
-  // report card's key, e.g. "2026-08". This is a fetch with the bearer
-  // token rather than a plain <a href>, so it stays behind the owner's login.
-  downloadVibrationReport: async (month: string): Promise<Blob> => {
-    const token = getOwnerToken();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    let resp: Response;
-    try {
-      resp = await fetch(
-        `${OWNER_API_BASE}/owner/reports/vibration/export?month=${encodeURIComponent(month)}&tz=${-new Date().getTimezoneOffset()}`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal }
-      );
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        throw new OwnerApiError('The download took too long. Please try again.', 0, 'timeout');
-      }
-      throw new OwnerApiError("Can't reach the CocoSense server. Check your connection and try again.", 0);
-    } finally {
-      clearTimeout(timeoutId);
-    }
-    if (resp.status === 401) setOwnerToken(null);
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => null);
-      throw new OwnerApiError(body?.error || `Download failed (${resp.status}).`, resp.status, body?.reason);
-    }
-    return resp.blob();
-  },
+  // Alert History: this owner's pest / impact alerts, newest first.
+  alerts: () => request<{ ok: true; alerts: any[] }>('/owner/alerts'),
+  reviewAlert: (id: number) => request<{ ok: true }>(`/owner/alerts/${id}/review`, { method: 'PATCH' }),
 
   piezoEvents: (piezoId: string, treeId?: number | null) =>
     request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}${treeId != null ? `?treeId=${treeId}` : ''}`),

@@ -109,7 +109,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => onNavigate('alerts')}
+              onClick={() => onNavigate('notifications')}
               className="flex-1 md:flex-initial px-4 py-2 rounded-lg bg-[#141414] hover:bg-[#1A1A1A] border border-[#404040] text-[#E0E0E0] text-xs font-semibold"
             >
               View Alerts
@@ -122,7 +122,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
         {/* Active Pest Alerts (Rhinoceros Beetle / Weevil) */}
         <div 
-          onClick={() => onNavigate('alerts')}
+          onClick={() => onNavigate('notifications')}
           className="rounded-xl bg-[#141414] border border-[#262626] p-5 shadow-lg hover:border-[#F44336]/60 transition-all cursor-pointer group relative overflow-hidden"
         >
           {criticalAlerts.length > 0 && (
@@ -196,7 +196,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </h2>
             <button
               type="button"
-              onClick={() => onNavigate('alerts')}
+              onClick={() => onNavigate('notifications')}
               className="text-xs font-bold text-[#16A34A] hover:underline flex items-center gap-1 uppercase tracking-wider"
             >
               View All

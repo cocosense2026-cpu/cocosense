@@ -370,30 +370,45 @@ export const EventsPage: React.FC = () => {
                 );
               })}
             </div>
+            {/* Rename / Delete act on the tree that's selected. Always shown;
+                Delete is disabled (with a reason) while it's the device's
+                only tree, because a device needs at least one. */}
+            {currentTree && (
+              <div className="flex-shrink-0 flex items-stretch gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNameDialog({ mode: 'rename', tree: currentTree })}
+                  disabled={treeBusy}
+                  title={`Rename ${currentTree.name}`}
+                  aria-label={`Rename ${currentTree.name}`}
+                  className="flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-lg border border-[#262626] bg-[#141414] text-[#E0E0E0] text-xs font-semibold whitespace-nowrap hover:border-[#D4AF37]/60 hover:text-[#D4AF37] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Rename</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNameDialog({ mode: 'delete', tree: currentTree })}
+                  disabled={treeBusy || nodeTrees.length < 2}
+                  title={
+                    nodeTrees.length < 2
+                      ? 'A device needs at least one tree. Add another tree first.'
+                      : `Delete ${currentTree.name}`
+                  }
+                  aria-label={`Delete ${currentTree.name}`}
+                  className="flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-lg border border-[#F44336]/30 bg-[#141414] text-[#F44336] text-xs font-semibold whitespace-nowrap hover:bg-[#2B1B1B] hover:border-[#F44336]/60 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#141414] disabled:hover:border-[#F44336]/30 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Delete</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {treeError && <p className="text-[11px] text-[#F44336]">{treeError}</p>}
           {currentTree && (
             <p className="text-[11px] text-[#808080]">
               Your device is monitoring <span className="text-white font-semibold break-all">{currentTree.name}</span>.{' '}
-              <button
-                type="button"
-                onClick={() => setNameDialog({ mode: 'rename', tree: currentTree })}
-                className="inline-flex items-center gap-1 text-[#D4AF37] hover:text-[#E2BE4A] font-semibold transition-colors"
-              >
-                <Pencil className="w-3 h-3" /> Rename
-              </button>{' '}
-              {nodeTrees.length > 1 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setNameDialog({ mode: 'delete', tree: currentTree })}
-                    className="inline-flex items-center gap-1 text-[#F44336] hover:text-[#FF6B60] font-semibold transition-colors"
-                  >
-                    <Trash2 className="w-3 h-3" /> Delete
-                  </button>{' '}
-                </>
-              )}
               New readings are saved to this tree; tap another tree to move the device back to it and see its earlier
               data.
             </p>

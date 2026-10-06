@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import { toCamel, validateAvatarDataUrl } from '../utils.js';
 import { verifyPassword, generateSessionToken, sessionExpiryIso } from '../auth.js';
 import { restampRowHash } from '../hash.js';
+import { allOwnersScope, buildVibrationReport, buildVibrationCsv, parseTz } from '../reports.js';
 
 const router = Router();
 
@@ -113,6 +114,26 @@ router.patch('/admin/profile', requireAdminAuth, async (req, res) => {
 
   const updated = await db.prepare(`SELECT * FROM admins WHERE id = ?`).get(req.adminRow.id);
   res.json({ ok: true, admin: publicAdmin(updated) });
+});
+
+// ========== Monthly Report ==========
+// Month-by-month vibration report across EVERY farm owner's hardware, for the
+// admin console's "Monthly Report" page. See server/reports.js.
+router.get('/admin/reports/vibration', requireAdminAuth, async (req, res) => {
+  res.json(await buildVibrationReport(allOwnersScope(), parseTz(req.query.tz)));
+});
+
+// GET /admin/reports/vibration/export?month=2026-08&tz=480 -> a CSV of that
+// month. A fetch with the bearer token (not a plain link) so it stays behind
+// the admin login.
+router.get('/admin/reports/vibration/export', requireAdminAuth, async (req, res) => {
+  const month = String(req.query.month ?? '');
+  const result = await buildVibrationCsv(allOwnersScope(), month, parseTz(req.query.tz));
+  if (result.error) return res.status(result.status).json({ ok: false, error: result.error });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="cocosense-monthly-report-${month}.csv"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(result.csv);
 });
 
 export default router;

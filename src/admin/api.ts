@@ -161,6 +161,36 @@ export const adminApi = {
       `/admin/activity/feed?${q.toString()}`
     );
   },
+  // Monthly Report: month-by-month vibration across every owner's hardware.
+  // tz = minutes EAST of UTC so months are cut at the admin's local midnight.
+  vibrationReport: () => request<any>(`/admin/reports/vibration?tz=${-new Date().getTimezoneOffset()}`),
+  // One month as a CSV (Blob). A fetch with the bearer token rather than a
+  // plain <a href>, so it stays behind the admin login.
+  downloadVibrationReport: async (month: string): Promise<Blob> => {
+    const token = getAdminToken();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let resp: Response;
+    try {
+      resp = await fetch(
+        `${ADMIN_API_BASE}/admin/reports/vibration/export?month=${encodeURIComponent(month)}&tz=${-new Date().getTimezoneOffset()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal }
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new AdminApiError('The download took too long. Please try again.', 0);
+      }
+      throw new AdminApiError("Can't reach the CocoSense server. Check your connection and try again.", 0);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (resp.status === 401) setAdminToken(null);
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null);
+      throw new AdminApiError(body?.error || `Download failed (${resp.status}).`, resp.status);
+    }
+    return resp.blob();
+  },
   exportBackup: () =>
     request<{ ok: true; version: string; exportedAt: string; exportedBy: string; system: string; tables: Record<string, unknown[]> }>(
       '/admin/backup/export',

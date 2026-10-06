@@ -7,7 +7,7 @@ import {
   LayoutDashboard, 
   Users, 
   MapPinned, 
-  AlertTriangle, 
+  CalendarRange, 
   FileText, 
   Bell, 
   Settings, 
@@ -24,7 +24,7 @@ export type ActiveView =
   | 'owners'
   | 'activity'
   | 'municipalities'
-  | 'alerts'
+  | 'monthly-report'
   | 'reports'
   | 'notifications'
   | 'settings';
@@ -69,12 +69,19 @@ export const Navigation: React.FC<NavigationProps> = ({
     logout();
   };
 
-  const navItems = [
+  const navItems: Array<{
+    id: ActiveView;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge: string | null;
+    liveTone?: boolean;
+    alertTone?: boolean;
+  }> = [
     { id: 'dashboard' as ActiveView, label: 'Dashboard & Radar', icon: LayoutDashboard, badge: null },
     { id: 'owners' as ActiveView, label: 'Farm Owners', icon: Users, badge: '5' },
     { id: 'activity' as ActiveView, label: 'Recent Activity', icon: Activity, badge: onlineOwnersCount > 0 ? `${onlineOwnersCount} LIVE` : null, liveTone: true },
     { id: 'municipalities' as ActiveView, label: 'Municipality Map', icon: MapPinned, badge: `${ownersCount}` },
-    { id: 'alerts' as ActiveView, label: 'Alert History', icon: AlertTriangle, badge: criticalAlertsCount > 0 ? `${criticalAlertsCount} CRIT` : null, alertTone: true },
+    { id: 'monthly-report' as ActiveView, label: 'Monthly Report', icon: CalendarRange, badge: null },
     { id: 'reports' as ActiveView, label: 'Bioacoustic Reports', icon: FileText, badge: null },
     { id: 'notifications' as ActiveView, label: 'Notifications', icon: Bell, badge: unreadCount > 0 ? `${unreadCount}` : null },
     { id: 'settings' as ActiveView, label: 'Settings & Security', icon: Settings, badge: null },

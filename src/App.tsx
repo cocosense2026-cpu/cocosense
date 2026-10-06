@@ -14,7 +14,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { DashboardView } from './views/DashboardView';
 import { FarmOwnersView } from './views/FarmOwnersView';
 import { MunicipalityMapView } from './views/MunicipalityMapView';
-import { AlertHistoryView } from './views/AlertHistoryView';
+import { MonthlyReportView } from './views/MonthlyReportView';
 import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
@@ -126,10 +126,6 @@ export function App() {
     showToast('Alert marked as reviewed & field technician notified.');
   };
 
-  const handleClearAllReviewedAlerts = () => {
-    setAlerts(prev => prev.filter(a => !a.reviewed));
-    showToast('Cleared all reviewed alerts from history.');
-  };
 
   const handleUpdateTreeStatus = (treeId: string, status: MonitoredTree['status']) => {
     setTrees(prev => prev.map(t => t.id === treeId ? { ...t, status } : t));
@@ -348,7 +344,7 @@ export function App() {
             {criticalAlertsCount > 0 && (
               <button
                 type="button"
-                onClick={() => setCurrentView('alerts')}
+                onClick={() => setCurrentView('notifications')}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/40 text-xs font-bold transition-all shadow-sm"
                 title={`${criticalAlertsCount} critical pest alerts active`}
               >
@@ -411,13 +407,7 @@ export function App() {
             />
           )}
 
-          {currentView === 'alerts' && (
-            <AlertHistoryView
-              alerts={alerts}
-              onResolveAlert={handleResolveAlert}
-              onClearAllReviewed={handleClearAllReviewedAlerts}
-            />
-          )}
+          {currentView === 'monthly-report' && <MonthlyReportView />}
 
           {currentView === 'reports' && (
             <ReportsView

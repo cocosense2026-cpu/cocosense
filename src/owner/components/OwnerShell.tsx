@@ -4,7 +4,7 @@ import {
   LayoutGrid,
   Bell,
   Activity,
-  FileText,
+  History,
   Radio,
   Settings,
   Menu,
@@ -31,7 +31,7 @@ const buildNavItems = (unreadCount: number) => [
     badge: unreadCount > 0 ? `${unreadCount}` : null,
   },
   { to: '/owner/events', label: 'Vibration Events', icon: Activity, badge: null as string | null },
-  { to: '/owner/report', label: 'Report', icon: FileText, badge: null as string | null },
+  { to: '/owner/alerts', label: 'Alert History', icon: History, badge: null as string | null },
   { to: '/owner/nodes', label: 'Master Node Mesh', icon: Radio, badge: null as string | null },
   { to: '/owner/settings', label: 'Settings', icon: Settings, badge: null as string | null },
 ];

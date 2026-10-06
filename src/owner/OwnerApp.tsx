@@ -13,7 +13,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { EventsPage } from './pages/EventsPage';
 import { PiezoDetailPage } from './pages/PiezoDetailPage';
-import { ReportPage } from './pages/ReportPage';
+import { AlertHistoryPage } from './pages/AlertHistoryPage';
 import { MasterNodesPage } from './pages/MasterNodesPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -127,7 +127,7 @@ const OwnerRoutes: React.FC = () => (
       <Route path="notifications" element={<NotificationsPage />} />
       <Route path="events" element={<EventsPage />} />
       <Route path="events/piezo/:piezoId" element={<PiezoDetailPage />} />
-      <Route path="report" element={<ReportPage />} />
+      <Route path="alerts" element={<AlertHistoryPage />} />
       <Route path="nodes" element={<MasterNodesPage />} />
       <Route path="profile" element={<ProfilePage />} />
       <Route path="settings" element={<SettingsPage />} />
