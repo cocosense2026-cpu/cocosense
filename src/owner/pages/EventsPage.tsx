@@ -278,7 +278,7 @@ export const EventsPage: React.FC = () => {
       })
       .catch(() => void 0);
   }, [sort, treeId, treesReady]);
-  usePolling(refresh, 10000);
+  usePolling(refresh, 1000);
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
   const StatusIcon = style.icon;
@@ -584,10 +584,11 @@ export const EventsPage: React.FC = () => {
                 </div>
               </Link>
 
-              {/* Owner controls for THIS piezo on THIS tree. Infected and
+              {/* Owner controls for THIS piezo on THIS tree. Shown on ALL four
+                  piezos (including 3 and 4, even if not wired yet). Infected and
                   Cleared are one setting, so turning one on turns the
                   other off; clicking the one that's on clears both. */}
-              {panel.enabled && panel.treeId != null && (
+              {panel.treeId != null && (
                 <div className="px-5 sm:px-6 pb-5 sm:pb-6">
                   <div className="flex items-stretch gap-2 pt-4 border-t border-[#262626]">
                     <button

@@ -50,7 +50,7 @@ export const DashboardPage: React.FC = () => {
   const refresh = useCallback(() => {
     ownerApi.dashboard().then(setData).catch(() => void 0);
   }, []);
-  usePolling(refresh, 10000);
+  usePolling(refresh, 1000);
 
   // LoRa Mesh mirrors the Master Node Mesh page: Online when at least one
   // of the owner's master nodes is online, otherwise Offline.

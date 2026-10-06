@@ -75,7 +75,7 @@ export const MasterNodesPage: React.FC = () => {
   const refresh = useCallback(() => {
     ownerApi.nodes().then((res: any) => setNodes(res || [])).catch(() => void 0);
   }, []);
-  usePolling(refresh, 10000);
+  usePolling(refresh, 1000);
 
   const onlineCount = nodes.filter((n) => n.online).length;
 

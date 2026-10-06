@@ -102,7 +102,7 @@ export const PiezoDetailPage: React.FC = () => {
       .finally(() => setLoading(false));
   }, [piezoId, treeId]);
 
-  usePolling(load, 10000);
+  usePolling(load, 1000);
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
   const StatusIcon = style.icon;
