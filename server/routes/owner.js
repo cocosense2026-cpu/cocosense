@@ -2,7 +2,16 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, applyDerivedNodeHealth, GRAMS_ELEVATED, GRAMS_CRITICAL } from '../utils.js';
 import { weekPeaks } from '../rollup.js';
-import { ensureActiveTree, createTree, activateTree, MAX_TREES_PER_NODE } from '../trees.js';
+import {
+  ensureActiveTree,
+  createTree,
+  activateTree,
+  renameTree,
+  cleanTreeName,
+  treeNameTaken,
+  MAX_TREES_PER_NODE,
+  MAX_TREE_NAME_LENGTH,
+} from '../trees.js';
 import {
   verifyPassword,
   hashPassword,
@@ -738,7 +747,15 @@ router.post('/owner/trees', requireOwnerAuth, async (req, res) => {
   if (owned.length === 0) {
     return res.status(400).json({ ok: false, error: 'Link a master node first -- a tree needs a device to monitor it.' });
   }
-  const requested = (req.body || {}).nodeId;
+  const body = req.body || {};
+  const requested = body.nodeId;
+
+  // The owner names the tree in the "+ Tree" dialog. A blank name is fine
+  // (falls back to "Tree N"); a too-long or duplicate one is rejected.
+  const typedName = cleanTreeName(body.name);
+  if (typedName && typedName.length > MAX_TREE_NAME_LENGTH) {
+    return res.status(400).json({ ok: false, error: `Tree names can be up to ${MAX_TREE_NAME_LENGTH} characters.` });
+  }
   let nodeId = requested;
   if (!nodeId) {
     if (owned.length > 1) {
@@ -758,10 +775,39 @@ router.post('/owner/trees', requireOwnerAuth, async (req, res) => {
     return res.status(409).json({ ok: false, error: `A master node can have up to ${MAX_TREES_PER_NODE} trees.` });
   }
 
-  const id = await createTree(nodeId, ownerId, { activate: true });
+  if (typedName && (await treeNameTaken(nodeId, typedName))) {
+    return res.status(409).json({ ok: false, error: `You already have a tree called "${typedName}" on this device.` });
+  }
+
+  const id = await createTree(nodeId, ownerId, { activate: true, name: typedName });
   const row = await db.prepare(`SELECT * FROM node_trees WHERE id = ?`).get(id);
   await logActivity(ownerId, 'Added a tree', `${row.name} on ${nodeId}`);
   res.status(201).json({ ok: true, tree: publicTree(row), ...(await listOwnerTrees(ownerId)) });
+});
+
+// Rename any tree -- including the starting "Tree 1". Only the name changes;
+// the tree's readings, charts and logs stay exactly as they were.
+router.post('/owner/trees/:id/rename', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const tree = await db
+    .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ?`)
+    .get(Number(req.params.id), ownerId);
+  if (!tree) return res.status(404).json({ ok: false, error: 'Tree not found.' });
+
+  const name = cleanTreeName((req.body || {}).name);
+  if (!name) return res.status(400).json({ ok: false, error: 'Please enter a name for this tree.' });
+  if (name.length > MAX_TREE_NAME_LENGTH) {
+    return res.status(400).json({ ok: false, error: `Tree names can be up to ${MAX_TREE_NAME_LENGTH} characters.` });
+  }
+  if (name !== tree.name) {
+    if (await treeNameTaken(tree.node_id, name, tree.id)) {
+      return res.status(409).json({ ok: false, error: `You already have a tree called "${name}" on this device.` });
+    }
+    await renameTree(tree.id, name);
+    await logActivity(ownerId, 'Renamed a tree', `${tree.name} -> ${name}`);
+  }
+  const fresh = await db.prepare(`SELECT * FROM node_trees WHERE id = ?`).get(tree.id);
+  res.json({ ok: true, tree: publicTree(fresh), ...(await listOwnerTrees(ownerId)) });
 });
 
 // Picking an existing tree = putting the device back on it: new readings are

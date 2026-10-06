@@ -8,6 +8,32 @@ import { db } from './db.js';
 import { restampRowHash } from './hash.js';
 
 export const MAX_TREES_PER_NODE = 500;
+export const MAX_TREE_NAME_LENGTH = 60;
+
+// Owners name their own trees ("Tree 1" is only the starting name). Returns
+// the cleaned name, or null if nothing usable was typed. Control characters
+// are dropped and runs of whitespace collapsed so a name can't break layout
+// or sneak in invisible duplicates. Longer names are rejected by the caller
+// (not silently cut) so the owner sees what was actually saved.
+export function cleanTreeName(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned || null;
+}
+
+// Two trees on the same device can't share a name (case-insensitive), or
+// the tabs would be indistinguishable.
+export async function treeNameTaken(nodeId, name, exceptId = null) {
+  const row = await db
+    .prepare(`SELECT id FROM node_trees WHERE node_id = ? AND lower(name) = lower(?) AND id != ? LIMIT 1`)
+    .get(nodeId, name, exceptId ?? -1);
+  return !!row;
+}
+
+export async function renameTree(id, name) {
+  await db.prepare(`UPDATE node_trees SET name = ? WHERE id = ?`).run(name, id);
+  await restampTree(id);
+}
 
 async function restampTree(id) {
   await restampRowHash(db, 'node_trees', 'id', id);
@@ -29,7 +55,7 @@ async function adoptUntaggedReadings(nodeId, treeId) {
   await db.prepare(`UPDATE vibration_rollup SET node_tree_id = ? WHERE node_id = ? AND node_tree_id = 0`).run(treeId, nodeId);
 }
 
-export async function createTree(nodeId, ownerId, { activate = true } = {}) {
+export async function createTree(nodeId, ownerId, { activate = true, name = null } = {}) {
   const next = await db
     .prepare(`SELECT COALESCE(MAX(number), 0) + 1 AS n FROM node_trees WHERE node_id = ?`)
     .get(nodeId);
@@ -39,7 +65,7 @@ export async function createTree(nodeId, ownerId, { activate = true } = {}) {
   // currently active. Activation is a separate atomic step below.
   const result = await db
     .prepare(`INSERT INTO node_trees (node_id, owner_id, number, name, is_active) VALUES (?, ?, ?, ?, 0)`)
-    .run(nodeId, ownerId ?? null, number, `Tree ${number}`);
+    .run(nodeId, ownerId ?? null, number, name ?? `Tree ${number}`);
   const id = Number(result.lastInsertRowid);
   if (activate) await activateTree({ id, node_id: nodeId });
   else await restampTree(id);

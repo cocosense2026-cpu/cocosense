@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2 } from 'lucide-react';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil } from 'lucide-react';
+import { TreeNameModal } from '../components/TreeNameModal';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -107,6 +108,8 @@ export const EventsPage: React.FC = () => {
   const [treesReady, setTreesReady] = useState(false);
   const [treeBusy, setTreeBusy] = useState(false);
   const [treeError, setTreeError] = useState<string | null>(null);
+  // The "name this tree" dialog: opened by "+ Tree" or by renaming the selected tree.
+  const [nameDialog, setNameDialog] = useState<{ mode: 'add' } | { mode: 'rename'; tree: TreeInfo } | null>(null);
   const treeIdRef = useRef<number | null>(null);
   treeIdRef.current = treeId;
   const selectedChipRef = useRef<HTMLButtonElement | null>(null);
@@ -157,23 +160,25 @@ export const EventsPage: React.FC = () => {
     }
   };
 
-  const addTree = async () => {
-    if (treeBusy) return;
+  // Called by the name dialog. Errors (duplicate name, too long...) are
+  // thrown back to the dialog so they show next to the field.
+  const submitNewTree = async (name: string) => {
+    const res = await ownerApi.addTree(nodeId ?? undefined, name || undefined);
+    setNameDialog(null);
     setTreeError(null);
-    setTreeBusy(true);
-    try {
-      const res = await ownerApi.addTree(nodeId ?? undefined);
-      setData(null);
-      setLoading(true);
-      setNodes(res.nodes);
-      setTrees(res.trees);
-      setNodeId(res.tree.nodeId);
-      setTreeId(res.tree.id);
-    } catch (err: any) {
-      setTreeError(err?.message || "Couldn't add a tree. Please try again.");
-    } finally {
-      setTreeBusy(false);
-    }
+    setData(null);
+    setLoading(true);
+    setNodes(res.nodes);
+    setTrees(res.trees);
+    setNodeId(res.tree.nodeId);
+    setTreeId(res.tree.id);
+  };
+
+  const submitRename = async (tree: TreeInfo, name: string) => {
+    const res = await ownerApi.renameTree(tree.id, name);
+    setNameDialog(null);
+    setTrees(res.trees);
+    setData((d) => (d && d.tree && d.tree.id === tree.id ? { ...d, tree: { ...d.tree, name: res.tree.name } } : d));
   };
 
   const selectNode = (id: string) => {
@@ -278,7 +283,7 @@ export const EventsPage: React.FC = () => {
           <div className="flex items-stretch gap-2">
             <button
               type="button"
-              onClick={addTree}
+              onClick={() => setNameDialog({ mode: 'add' })}
               disabled={treeBusy}
               className="flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#E2BE4A] disabled:opacity-60 text-black text-xs font-bold transition-colors"
             >
@@ -295,13 +300,14 @@ export const EventsPage: React.FC = () => {
                     onClick={() => selectTree(t)}
                     disabled={treeBusy}
                     aria-pressed={selected}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap transition-colors ${
+                    title={t.name}
+                    className={`flex-shrink-0 max-w-[220px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap transition-colors ${
                       selected
                         ? 'bg-[#1F1B0E] border-[#D4AF37] text-[#D4AF37]'
                         : 'bg-[#141414] border-[#262626] text-[#A0A0A0] hover:text-white hover:border-[#404040]'
                     }`}
                   >
-                    <TreePalm className="w-3.5 h-3.5" /> {t.name}
+                    <TreePalm className="w-3.5 h-3.5 flex-shrink-0" /> <span className="truncate">{t.name}</span>
                   </button>
                 );
               })}
@@ -311,11 +317,37 @@ export const EventsPage: React.FC = () => {
           {treeError && <p className="text-[11px] text-[#F44336]">{treeError}</p>}
           {currentTree && (
             <p className="text-[11px] text-[#808080]">
-              Your device is monitoring <span className="text-white font-semibold">{currentTree.name}</span>. New
-              readings are saved to this tree; tap another tree to move the device back to it and see its earlier data.
+              Your device is monitoring <span className="text-white font-semibold break-all">{currentTree.name}</span>.{' '}
+              <button
+                type="button"
+                onClick={() => setNameDialog({ mode: 'rename', tree: currentTree })}
+                className="inline-flex items-center gap-1 text-[#D4AF37] hover:text-[#E2BE4A] font-semibold transition-colors"
+              >
+                <Pencil className="w-3 h-3" /> Rename
+              </button>{' '}
+              New readings are saved to this tree; tap another tree to move the device back to it and see its earlier
+              data.
             </p>
           )}
         </div>
+      )}
+
+      {nameDialog?.mode === 'add' && (
+        <TreeNameModal
+          mode="add"
+          suggestedName={`Tree ${Math.max(0, ...nodeTrees.map((t) => t.number)) + 1}`}
+          nodeLabel={nodes.length > 1 ? nodes.find((n) => n.id === nodeId)?.name ?? nodeId : null}
+          onClose={() => setNameDialog(null)}
+          onSubmit={submitNewTree}
+        />
+      )}
+      {nameDialog?.mode === 'rename' && (
+        <TreeNameModal
+          mode="rename"
+          initialName={nameDialog.tree.name}
+          onClose={() => setNameDialog(null)}
+          onSubmit={(name) => submitRename(nameDialog.tree, name)}
+        />
       )}
 
       {/* Current status */}

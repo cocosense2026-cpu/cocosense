@@ -185,10 +185,15 @@ export const ownerApi = {
   // Trees the owner's device(s) have been placed on. Each tree keeps its own
   // monitor + recent log; exactly one per node is "active" (receiving data).
   trees: () => request<{ nodes: { id: string; name: string }[]; trees: any[] }>('/owner/trees'),
-  addTree: (nodeId?: string) =>
+  addTree: (nodeId?: string, name?: string) =>
     request<{ ok: true; tree: any; nodes: any[]; trees: any[] }>('/owner/trees', {
       method: 'POST',
-      body: JSON.stringify({ nodeId }),
+      body: JSON.stringify({ nodeId, name }),
+    }),
+  renameTree: (id: number, name: string) =>
+    request<{ ok: true; tree: any; nodes: any[]; trees: any[] }>(`/owner/trees/${id}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
     }),
   activateTree: (id: number) => request<{ ok: true; tree: any }>(`/owner/trees/${id}/activate`, { method: 'POST' }),
 
