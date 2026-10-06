@@ -101,6 +101,74 @@ export async function ensureActiveTree(nodeId, ownerId) {
   }
 }
 
+// Deletes a tree together with everything recorded under it (raw log, 15-min
+// rollup, piezo notes). Alerts and notifications already raised stay in the
+// owner's history -- they are records of what happened, not tree data.
+// If it was the tree the device is on, the device moves to its neighbour
+// (the previous tree, or the next one for the first) in the SAME atomic
+// batch, so there is never a moment with no active tree. Returns the id of
+// the tree that became active, or null when the deleted one wasn't active.
+// The caller must make sure the node keeps at least one other tree.
+export async function deleteTree(tree) {
+  const siblings = await db
+    .prepare(`SELECT id, number FROM node_trees WHERE node_id = ? AND id != ? ORDER BY number`)
+    .all(tree.node_id, tree.id);
+  let replacementId = null;
+  const statements = [];
+  if (tree.is_active && siblings.length) {
+    const before = siblings.filter((s) => Number(s.number) < Number(tree.number));
+    replacementId = Number((before.length ? before[before.length - 1] : siblings[0]).id);
+    statements.push([`UPDATE node_trees SET is_active = 0 WHERE node_id = ?`, [tree.node_id]]);
+    statements.push([`UPDATE node_trees SET is_active = 1 WHERE id = ?`, [replacementId]]);
+  }
+  statements.push([`DELETE FROM vibration_events WHERE node_tree_id = ?`, [tree.id]]);
+  statements.push([`DELETE FROM vibration_rollup WHERE node_tree_id = ?`, [tree.id]]);
+  statements.push([`DELETE FROM tree_piezo_state WHERE node_tree_id = ?`, [tree.id]]);
+  statements.push([`DELETE FROM node_trees WHERE id = ?`, [tree.id]]);
+  await db.batch(statements);
+  if (replacementId != null) await restampTree(replacementId);
+  return replacementId;
+}
+
+export const PEST_STATUSES = ['INFECTED', 'CLEARED'];
+
+// The owner's per-piezo notes for one tree, as Map<piezoSensorId, {active, pest}>.
+// A piezo with no row is the default: active, no pest status.
+export async function piezoStatesForTrees(treeIds) {
+  const out = new Map();
+  if (!treeIds.length) return out;
+  const rows = await db
+    .prepare(
+      `SELECT node_tree_id, piezo_sensor_id, is_active, pest_status FROM tree_piezo_state
+       WHERE node_tree_id IN (${treeIds.map(() => '?').join(',')})`
+    )
+    .all(...treeIds);
+  for (const r of rows) {
+    out.set(`${r.node_tree_id}:${r.piezo_sensor_id}`, { active: Number(r.is_active) !== 0, pest: r.pest_status ?? null });
+  }
+  return out;
+}
+
+export const DEFAULT_PIEZO_STATE = { active: true, pest: null };
+
+// Applies a partial change ({active?, pest?}) on top of the stored state.
+export async function setPiezoState(treeId, piezoId, patch) {
+  const cur = (await piezoStatesForTrees([treeId])).get(`${treeId}:${piezoId}`) ?? DEFAULT_PIEZO_STATE;
+  const next = {
+    active: patch.active !== undefined ? !!patch.active : cur.active,
+    pest: patch.pest !== undefined ? patch.pest : cur.pest,
+  };
+  await db
+    .prepare(
+      `INSERT INTO tree_piezo_state (node_tree_id, piezo_sensor_id, is_active, pest_status, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(node_tree_id, piezo_sensor_id) DO UPDATE SET
+         is_active = excluded.is_active, pest_status = excluded.pest_status, updated_at = excluded.updated_at`
+    )
+    .run(treeId, piezoId, next.active ? 1 : 0, next.pest);
+  return next;
+}
+
 // Makes `treeId` the node's active tree. Atomic, so a reading arriving
 // mid-switch never sees zero or two active trees.
 export async function activateTree(tree) {

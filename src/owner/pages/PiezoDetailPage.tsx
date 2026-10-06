@@ -30,6 +30,7 @@ interface PiezoDetail {
   nodeName: string;
   treeId?: number | null;
   treeName?: string | null;
+  treeState?: { active: boolean; pest: 'INFECTED' | 'CLEARED' | null };
   pin: string;
   piezoNumber: number;
   sensorLabel: string;
@@ -116,7 +117,7 @@ export const PiezoDetailPage: React.FC = () => {
         title={data ? data.sensorLabel : 'Piezo Transducer'}
         description={
           data
-            ? `Live readings from ${data.sensorLabel} (${data.pin}) on ${data.nodeName}${data.treeName ? ` · ${data.treeName}` : ''}. This view shows only this sensor's own vibration activity.`
+            ? `Live readings from ${data.sensorLabel} (${data.pin}) on ${data.nodeName}${data.treeName ? ` · ${data.treeName}` : ''}. This view shows only this sensor's own vibration activity.${data.treeState && !data.treeState.active ? ' You switched this piezo off for this tree, so it is not recording new readings.' : ''}${data.treeState?.pest === 'INFECTED' ? ' Marked as infected.' : data.treeState?.pest === 'CLEARED' ? ' Marked as pest-cleared.' : ''}`
             : 'Live readings from this individual piezo transducer.'
         }
         actions={

@@ -186,6 +186,22 @@ CREATE TABLE IF NOT EXISTS node_trees (
   row_hash            TEXT
 );
 
+-- The owner's own notes about ONE piezo on ONE tree. A row only exists once
+-- the owner has touched a button; no row means "active, no pest status".
+--   is_active   0 = switched off (e.g. the tree is dead): the node's readings
+--               from this piezo are ignored while the device is on this tree
+--               (routes/ingest.js), so a dead tree stops raising alerts.
+--   pest_status 'INFECTED' | 'CLEARED' | NULL. One value, so the two buttons
+--               can never both be on -- picking one replaces the other.
+CREATE TABLE IF NOT EXISTS tree_piezo_state (
+  node_tree_id    INTEGER NOT NULL REFERENCES node_trees(id) ON DELETE CASCADE,
+  piezo_sensor_id TEXT    NOT NULL,
+  is_active       INTEGER NOT NULL DEFAULT 1,
+  pest_status     TEXT CHECK (pest_status IN ('INFECTED', 'CLEARED')),
+  updated_at      TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (node_tree_id, piezo_sensor_id)
+);
+
 -- Every raw reading a node/device sends in. Always written, regardless of
 -- severity or pest match -- this is what backs charts / "recent logs".
 CREATE TABLE IF NOT EXISTS vibration_events (

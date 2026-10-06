@@ -136,8 +136,21 @@ router.post('/ingest-vibration', async (req, res) => {
   }
   const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, normalizedPin || 'A0');
 
+  // The owner can switch a piezo off for a tree (e.g. the tree is dead).
+  // While the device is on that tree, readings from that piezo are not
+  // recorded and raise no alerts -- but the node's own heartbeat (battery,
+  // signal, online) below is still updated, since the node itself is fine.
+  let piezoOff = false;
+  if (nodeTreeId != null) {
+    const st = await db
+      .prepare(`SELECT is_active FROM tree_piezo_state WHERE node_tree_id = ? AND piezo_sensor_id = ?`)
+      .get(nodeTreeId, piezoSensorIdValue);
+    piezoOff = !!st && Number(st.is_active) === 0;
+  }
+
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
+  if (!piezoOff) {
   const vibrationInsert = await db.prepare(
     `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, node_tree_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -186,6 +199,7 @@ router.post('/ingest-vibration', async (req, res) => {
          LIMIT 10
        )`
   ).run(piezoSensorIdValue, nodeTreeId, piezoSensorIdValue, nodeTreeId);
+  }
 
   // Keep master_nodes' live health snapshot fresh if this node is already
   // registered. battery/signal are only touched when the device actually
@@ -217,7 +231,7 @@ router.post('/ingest-vibration', async (req, res) => {
   //    toggles) for Elevated/Critical hits, same cooldown as the alert
   //    itself so it can't spam a channel any faster than Alert History
   //    already throttles to.
-  if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
+  if (!piezoOff && severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
     const impactInsert = await db.prepare(
       `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
        VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
@@ -247,7 +261,7 @@ router.post('/ingest-vibration', async (req, res) => {
   //    notification (bell icon) / would light up a pest-only dashboard
   //    banner; an ordinary knock never does, even if it's severe.
   //    Also throttled per-node -- see cooldown note above.
-  if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
+  if (!piezoOff && pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
     const pestDescription =
       `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
       (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
@@ -286,7 +300,7 @@ router.post('/ingest-vibration', async (req, res) => {
     buzzer = buzzer || pestResult.buzzer;
   }
 
-  res.json({ ok: true, severity, pest_likely: pestLikely, buzzer });
+  res.json({ ok: true, severity, pest_likely: pestLikely, buzzer, ...(piezoOff ? { ignored: true } : {}) });
 });
 
 export default router;

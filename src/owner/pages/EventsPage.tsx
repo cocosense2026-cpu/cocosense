@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil } from 'lucide-react';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil, Trash2, Power, Bug, ShieldCheck } from 'lucide-react';
 import { TreeNameModal } from '../components/TreeNameModal';
+import { TreeDeleteModal } from '../components/TreeDeleteModal';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -32,6 +33,8 @@ interface EventPanel {
   nodeId: string;
   nodeName: string;
   treeId?: number | null;
+  /** The owner's own notes for this piezo on this tree (Active / Infected / Cleared). */
+  treeState?: PiezoTreeState;
   pin: string;
   sensorLabel: string;
   sensorStatus: string;
@@ -42,6 +45,12 @@ interface EventPanel {
   /** Strongest reading in each hour of the last 7 days. */
   week?: WeekSeries | null;
   logs: EventRow[];
+}
+
+type PestStatus = 'INFECTED' | 'CLEARED' | null;
+interface PiezoTreeState {
+  active: boolean;
+  pest: PestStatus;
 }
 
 interface TreeInfo {
@@ -109,7 +118,9 @@ export const EventsPage: React.FC = () => {
   const [treeBusy, setTreeBusy] = useState(false);
   const [treeError, setTreeError] = useState<string | null>(null);
   // The "name this tree" dialog: opened by "+ Tree" or by renaming the selected tree.
-  const [nameDialog, setNameDialog] = useState<{ mode: 'add' } | { mode: 'rename'; tree: TreeInfo } | null>(null);
+  const [nameDialog, setNameDialog] = useState<
+    { mode: 'add' } | { mode: 'rename'; tree: TreeInfo } | { mode: 'delete'; tree: TreeInfo } | null
+  >(null);
   const treeIdRef = useRef<number | null>(null);
   treeIdRef.current = treeId;
   const selectedChipRef = useRef<HTMLButtonElement | null>(null);
@@ -192,6 +203,52 @@ export const EventsPage: React.FC = () => {
     }
   };
 
+  // Delete the selected tree. The server moves the device to a neighbouring
+  // tree if this was the one it was on, and tells us which.
+  const submitDelete = async (tree: TreeInfo) => {
+    const res = await ownerApi.deleteTree(tree.id);
+    setNameDialog(null);
+    setTreeError(null);
+    setNodes(res.nodes);
+    setTrees(res.trees);
+    if (tree.id === treeId) {
+      const fallback =
+        res.activeTreeId ?? res.trees.find((t: TreeInfo) => t.nodeId === tree.nodeId && t.isActive)?.id ?? null;
+      setData(null);
+      setLoading(true);
+      setTreeId(fallback);
+    }
+  };
+
+  // Active / Infected / Cleared buttons under each piezo. Shown instantly
+  // (optimistic) and rolled back if the server refuses. `stateVersion`
+  // makes the 10-second refresh drop any response that was already on its
+  // way when the owner clicked, so it can't flip a button back for a moment.
+  const stateVersion = useRef(0);
+  const stateInFlight = useRef(0);
+  const patchPanelState = (piezoId: string, state: PiezoTreeState) =>
+    setData((d) =>
+      d ? { ...d, panels: d.panels.map((p) => (p.piezoId === piezoId ? { ...p, treeState: state } : p)) } : d
+    );
+  const updatePiezoState = async (panel: EventPanel, patch: { active?: boolean; pest?: PestStatus }) => {
+    if (panel.treeId == null) return;
+    const prev: PiezoTreeState = panel.treeState ?? { active: true, pest: null };
+    stateVersion.current += 1;
+    stateInFlight.current += 1;
+    setTreeError(null);
+    patchPanelState(panel.piezoId, { ...prev, ...patch });
+    try {
+      const res = await ownerApi.setPiezoState(panel.treeId, panel.piezoId, patch);
+      patchPanelState(panel.piezoId, { active: res.state.active, pest: res.state.pest });
+    } catch (err: any) {
+      patchPanelState(panel.piezoId, prev);
+      setTreeError(err?.message || "Couldn't save that change. Please try again.");
+    } finally {
+      stateInFlight.current -= 1;
+      stateVersion.current += 1;
+    }
+  };
+
   useEffect(() => {
     if (!treesReady) return;
     let cancelled = false;
@@ -211,12 +268,13 @@ export const EventsPage: React.FC = () => {
   // only the initial load (above) shows that. A response for a tree the
   // owner has since switched away from is dropped, never shown.
   const refresh = useCallback(() => {
-    if (!treesReady) return;
+    if (!treesReady || stateInFlight.current > 0) return;
     const asked = treeId;
+    const version = stateVersion.current;
     ownerApi
       .events(sort, asked)
       .then((res) => {
-        if (treeIdRef.current === asked) setData(res);
+        if (treeIdRef.current === asked && stateVersion.current === version) setData(res);
       })
       .catch(() => void 0);
   }, [sort, treeId, treesReady]);
@@ -325,6 +383,17 @@ export const EventsPage: React.FC = () => {
               >
                 <Pencil className="w-3 h-3" /> Rename
               </button>{' '}
+              {nodeTrees.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setNameDialog({ mode: 'delete', tree: currentTree })}
+                    className="inline-flex items-center gap-1 text-[#F44336] hover:text-[#FF6B60] font-semibold transition-colors"
+                  >
+                    <Trash2 className="w-3 h-3" /> Delete
+                  </button>{' '}
+                </>
+              )}
               New readings are saved to this tree; tap another tree to move the device back to it and see its earlier
               data.
             </p>
@@ -339,6 +408,13 @@ export const EventsPage: React.FC = () => {
           nodeLabel={nodes.length > 1 ? nodes.find((n) => n.id === nodeId)?.name ?? nodeId : null}
           onClose={() => setNameDialog(null)}
           onSubmit={submitNewTree}
+        />
+      )}
+      {nameDialog?.mode === 'delete' && (
+        <TreeDeleteModal
+          treeName={nameDialog.tree.name}
+          onClose={() => setNameDialog(null)}
+          onConfirm={() => submitDelete(nameDialog.tree)}
         />
       )}
       {nameDialog?.mode === 'rename' && (
@@ -385,25 +461,40 @@ export const EventsPage: React.FC = () => {
               : panel.sparkline.length
               ? panel.sparkline
               : Array(8).fill({ grams: 0, severity: 'Normal' });
-            const panelStyle = SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
+            // Two separate "off" states: `enabled` is the HARDWARE (piezo
+            // damaged / not wired); `piezoOn` is the owner's switch for THIS
+            // tree (e.g. the tree is dead). A switched-off piezo keeps its
+            // history on screen but is not receiving new readings.
+            const piezoState = panel.treeState ?? { active: true, pest: null };
+            const piezoOn = piezoState.active;
+            const live = panel.enabled && piezoOn;
+            const switchedOff = panel.enabled && !piezoOn;
+            const panelStyle = switchedOff
+              ? SEVERITY_STYLES.Offline
+              : SEVERITY_STYLES[panel.status.severity] || SEVERITY_STYLES.Normal;
             const PanelStatusIcon = panelStyle.icon;
             const notConnected = panel.sensorStatus === 'NOT_CONNECTED';
             const badgeLabel = `P${index + 1}`;
-            const statusLabel = panel.enabled ? panel.status.severity || 'Normal' : 'Offline';
-            const statusMessage = panel.enabled
+            const statusLabel = switchedOff ? 'Switched off' : panel.enabled ? panel.status.severity || 'Normal' : 'Offline';
+            const statusMessage = switchedOff
+              ? "You switched this piezo off for this tree, so new readings from it aren't being recorded."
+              : panel.enabled
               ? SEVERITY_MESSAGES[panel.status.severity] || SEVERITY_MESSAGES.Normal
               : notConnected
               ? SEVERITY_MESSAGES.Offline
               : 'Sensor is disabled or not responding.';
             return (
-              <Link
+              <div
                 key={panel.piezoId}
-                to={`/owner/events/piezo/${encodeURIComponent(panel.piezoId)}${panel.treeId != null ? `?tree=${panel.treeId}` : ''}`}
-                className={`block rounded-lg border p-5 sm:p-6 transition-all ${
-                  panel.enabled
+                className={`rounded-lg border transition-all ${
+                  live
                     ? 'bg-[#141414] border-[#262626] hover:border-[#D4AF37]/50'
-                    : 'bg-[#111111] border-[#262626] opacity-70 hover:opacity-90'
+                    : 'bg-[#111111] border-[#262626]'
                 }`}
+              >
+              <Link
+                to={`/owner/events/piezo/${encodeURIComponent(panel.piezoId)}${panel.treeId != null ? `?tree=${panel.treeId}` : ''}`}
+                className={`block p-5 sm:p-6 transition-opacity ${live ? '' : 'opacity-70 hover:opacity-90'}`}
               >
                 {/* Header: piezo badge + name + active/inactive pill, and
                     vibration strength readout on the right -- mirrors the
@@ -412,7 +503,7 @@ export const EventsPage: React.FC = () => {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black ${
-                        panel.enabled ? 'bg-[#4CAF50] text-black' : 'bg-[#333333] text-[#A0A0A0]'
+                        live ? 'bg-[#4CAF50] text-black' : 'bg-[#333333] text-[#A0A0A0]'
                       }`}
                     >
                       {badgeLabel}
@@ -420,29 +511,29 @@ export const EventsPage: React.FC = () => {
                     <span className="text-sm font-bold text-white truncate">{panel.sensorLabel}</span>
                     <span
                       className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                        panel.enabled
+                        live
                           ? 'bg-[#142416] text-[#4CAF50] border border-[#4CAF50]/30'
                           : 'bg-[#1A1A1A] text-[#808080] border border-[#333333]'
                       }`}
                     >
-                      {panel.enabled ? 'Active' : 'Inactive'}
+                      {live ? 'Active' : 'Inactive'}
                     </span>
                   </div>
 
                   <div className="flex-shrink-0 flex items-center gap-2">
-                    <Activity className={`w-3.5 h-3.5 ${panel.enabled ? 'text-[#4CAF50]' : 'text-[#606060]'}`} />
+                    <Activity className={`w-3.5 h-3.5 ${live ? 'text-[#4CAF50]' : 'text-[#606060]'}`} />
                     <div className="text-right">
                       <div className="text-[9px] uppercase tracking-wider text-[#808080] font-semibold whitespace-nowrap">
                         Vibration Strength
                       </div>
                       <div className="text-sm font-bold text-white font-mono">
-                        {panel.enabled ? panel.status.grams.toFixed(2) : '0.00'}
+                        {live ? panel.status.grams.toFixed(2) : '0.00'}
                         <span className="text-[10px] text-[#808080] font-normal"> g</span>
                       </div>
                     </div>
                     <span
                       className={`w-3 h-4 rounded-sm flex-shrink-0 ${
-                        panel.enabled ? 'bg-[#4CAF50]' : 'border border-[#404040] bg-transparent'
+                        live ? 'bg-[#4CAF50]' : 'border border-[#404040] bg-transparent'
                       }`}
                     />
                   </div>
@@ -477,6 +568,56 @@ export const EventsPage: React.FC = () => {
                   </div>
                 </div>
               </Link>
+
+              {/* Owner controls for THIS piezo on THIS tree. Infected and
+                  Cleared are one setting, so turning one on turns the
+                  other off; clicking the one that's on clears both. */}
+              {panel.enabled && panel.treeId != null && (
+                <div className="px-5 sm:px-6 pb-5 sm:pb-6">
+                  <div className="flex items-stretch gap-2 pt-4 border-t border-[#262626]">
+                    <button
+                      type="button"
+                      aria-pressed={piezoOn}
+                      onClick={() => updatePiezoState(panel, { active: !piezoOn })}
+                      title={piezoOn ? 'Switch this piezo off (e.g. the tree is dead)' : 'Switch this piezo back on'}
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-bold transition-colors ${
+                        piezoOn
+                          ? 'bg-[#142416] border-[#4CAF50]/40 text-[#4CAF50] hover:bg-[#1A2E1D]'
+                          : 'bg-[#1A1A1A] border-[#333333] text-[#808080] hover:text-white'
+                      }`}
+                    >
+                      <Power className="w-3.5 h-3.5" /> {piezoOn ? 'Active' : 'Inactive'}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={piezoState.pest === 'INFECTED'}
+                      onClick={() => updatePiezoState(panel, { pest: piezoState.pest === 'INFECTED' ? null : 'INFECTED' })}
+                      title="Mark this tree as infected with pests"
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-bold transition-colors ${
+                        piezoState.pest === 'INFECTED'
+                          ? 'bg-[#2B1B1B] border-[#F44336]/50 text-[#F44336]'
+                          : 'bg-[#1A1A1A] border-[#333333] text-[#808080] hover:text-white'
+                      }`}
+                    >
+                      <Bug className="w-3.5 h-3.5" /> Infected
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={piezoState.pest === 'CLEARED'}
+                      onClick={() => updatePiezoState(panel, { pest: piezoState.pest === 'CLEARED' ? null : 'CLEARED' })}
+                      title="Mark this tree as free of pests again"
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-bold transition-colors ${
+                        piezoState.pest === 'CLEARED'
+                          ? 'bg-[#142416] border-[#4CAF50]/50 text-[#4CAF50]'
+                          : 'bg-[#1A1A1A] border-[#333333] text-[#808080] hover:text-white'
+                      }`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" /> Cleared
+                    </button>
+                  </div>
+                </div>
+              )}
+              </div>
             );
           })}
         </div>

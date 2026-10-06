@@ -190,6 +190,22 @@ export const ownerApi = {
       method: 'POST',
       body: JSON.stringify({ nodeId, name }),
     }),
+  deleteTree: (id: number) =>
+    request<{ ok: true; deletedId: number; activeTreeId: number | null; nodes: any[]; trees: any[] }>(
+      `/owner/trees/${id}/delete`,
+      { method: 'POST' }
+    ),
+  // Per-piezo controls on a tree: switch it off/on, or mark it Infected /
+  // Cleared (one value -- picking one replaces the other; null clears it).
+  setPiezoState: (
+    treeId: number,
+    piezoId: string,
+    patch: { active?: boolean; pest?: 'INFECTED' | 'CLEARED' | null }
+  ) =>
+    request<{ ok: true; state: { piezoId: string; active: boolean; pest: 'INFECTED' | 'CLEARED' | null } }>(
+      `/owner/trees/${treeId}/piezo-state`,
+      { method: 'POST', body: JSON.stringify({ piezoId, ...patch }) }
+    ),
   renameTree: (id: number, name: string) =>
     request<{ ok: true; tree: any; nodes: any[]; trees: any[] }>(`/owner/trees/${id}/rename`, {
       method: 'POST',

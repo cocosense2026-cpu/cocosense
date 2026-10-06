@@ -59,6 +59,7 @@ const TABLE_COLUMNS = {
   ],
   piezo_sensors: ['id', 'node_id', 'tree_id', 'status', 'frequency_hz', 'voltage_mv', 'row_hash'],
   node_trees: ['id', 'node_id', 'owner_id', 'number', 'name', 'is_active', 'created_at', 'row_hash'],
+  tree_piezo_state: ['node_tree_id', 'piezo_sensor_id', 'is_active', 'pest_status', 'updated_at'],
   monitored_trees: [
     'id', 'owner_id', 'sector', 'row', 'col', 'x', 'y', 'status', 'threat_score',
     'pest_detected', 'vibration_frequency_hz', 'vibration_grams', 'last_inspected',

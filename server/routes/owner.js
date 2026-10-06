@@ -7,6 +7,11 @@ import {
   createTree,
   activateTree,
   renameTree,
+  deleteTree,
+  piezoStatesForTrees,
+  setPiezoState,
+  DEFAULT_PIEZO_STATE,
+  PEST_STATUSES,
   cleanTreeName,
   treeNameTaken,
   MAX_TREES_PER_NODE,
@@ -810,6 +815,76 @@ router.post('/owner/trees/:id/rename', requireOwnerAuth, async (req, res) => {
   res.json({ ok: true, tree: publicTree(fresh), ...(await listOwnerTrees(ownerId)) });
 });
 
+// Delete a tree and everything recorded under it. A device always keeps at
+// least one tree. If it was the tree the device is on, the device moves to a
+// neighbouring tree and the response says which one.
+router.post('/owner/trees/:id/delete', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const tree = await db
+    .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ?`)
+    .get(Number(req.params.id), ownerId);
+  if (!tree) return res.status(404).json({ ok: false, error: 'Tree not found.' });
+
+  const others = await db
+    .prepare(`SELECT COUNT(*) AS n FROM node_trees WHERE node_id = ? AND id != ?`)
+    .get(tree.node_id, tree.id);
+  if (Number(others.n) === 0) {
+    return res.status(409).json({
+      ok: false,
+      error: 'A device needs at least one tree. Add another tree first, or rename this one instead.',
+    });
+  }
+
+  const activeTreeId = await deleteTree(tree);
+  await logActivity(ownerId, 'Deleted a tree', `${tree.name} on ${tree.node_id}`);
+  res.json({ ok: true, deletedId: Number(tree.id), activeTreeId, ...(await listOwnerTrees(ownerId)) });
+});
+
+// Per-piezo controls shown under each piezo on a tree: Active/Inactive, and
+// Infected / Cleared. `pest` is a single value, so Infected and Cleared can
+// never both be on -- sending one replaces the other, sending null clears it.
+router.post('/owner/trees/:id/piezo-state', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const tree = await db
+    .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ?`)
+    .get(Number(req.params.id), ownerId);
+  if (!tree) return res.status(404).json({ ok: false, error: 'Tree not found.' });
+
+  const body = req.body || {};
+  const piezo = await db
+    .prepare(`SELECT id FROM piezo_sensors WHERE id = ? AND node_id = ?`)
+    .get(String(body.piezoId ?? ''), tree.node_id);
+  if (!piezo) return res.status(404).json({ ok: false, error: "That piezo isn't part of this tree's device." });
+
+  const patch = {};
+  if (body.active !== undefined) {
+    if (typeof body.active !== 'boolean') return res.status(400).json({ ok: false, error: 'active must be true or false.' });
+    patch.active = body.active;
+  }
+  if ('pest' in body) {
+    if (body.pest !== null && !PEST_STATUSES.includes(body.pest)) {
+      return res.status(400).json({ ok: false, error: 'pest must be INFECTED, CLEARED or null.' });
+    }
+    patch.pest = body.pest;
+  }
+  if (!('active' in patch) && !('pest' in patch)) {
+    return res.status(400).json({ ok: false, error: 'Nothing to change.' });
+  }
+
+  const before = (await piezoStatesForTrees([tree.id])).get(`${tree.id}:${piezo.id}`) ?? DEFAULT_PIEZO_STATE;
+  const state = await setPiezoState(tree.id, piezo.id, patch);
+
+  const piezoLabel = `Piezo ${PIEZO_PINS.indexOf(piezo.id.split('-').pop()) + 1}`;
+  const changes = [];
+  if (state.active !== before.active) changes.push(state.active ? 'switched on' : 'switched off');
+  if (state.pest !== before.pest) {
+    changes.push(state.pest === 'INFECTED' ? 'marked infected' : state.pest === 'CLEARED' ? 'marked pest-cleared' : 'pest status reset');
+  }
+  if (changes.length) await logActivity(ownerId, 'Updated a piezo', `${piezoLabel} ${changes.join(', ')} on ${tree.name}`);
+
+  res.json({ ok: true, state: { piezoId: piezo.id, ...state } });
+});
+
 // Picking an existing tree = putting the device back on it: new readings are
 // filed under this tree from now on, and its old monitor/log are shown again.
 router.post('/owner/trees/:id/activate', requireOwnerAuth, async (req, res) => {
@@ -854,6 +929,10 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   for (const node of nodes) {
     treeByNode[node.id] = selectedTree ?? (await ensureActiveTree(node.id, ownerId));
   }
+  // The owner's Active/Infected/Cleared notes for the piezos being shown.
+  const piezoStates = await piezoStatesForTrees(
+    Object.values(treeByNode).filter(Boolean).map((t) => Number(t.id))
+  );
 
   // One panel per PIEZO TRANSDUCER, not per master node -- every master
   // node always carries exactly 4 piezo_sensors, one per analog input
@@ -926,6 +1005,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
         nodeName: node.name,
         treeId,
         treeName: tree?.name ?? null,
+        treeState: piezoStates.get(`${treeId}:${sensor.id}`) ?? DEFAULT_PIEZO_STATE,
         pin,
         piezoNumber: pieceNum,
         sensorLabel: `Piezo ${pieceNum > 0 ? pieceNum : '?'}`,
@@ -1061,6 +1141,7 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
     nodeName: sensor.nodeName,
     treeId,
     treeName: tree?.name ?? null,
+    treeState: (await piezoStatesForTrees(treeId != null ? [treeId] : [])).get(`${treeId}:${sensor.id}`) ?? DEFAULT_PIEZO_STATE,
     pin,
     piezoNumber,
     sensorLabel: `Piezo ${piezoNumber > 0 ? piezoNumber : '?'}`,
