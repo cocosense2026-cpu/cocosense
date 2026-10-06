@@ -259,6 +259,11 @@ const migrations = [
   // (who is online right now). owner_access_log itself is a brand-new
   // table, so CREATE TABLE IF NOT EXISTS in schema.sql covers it.
   `ALTER TABLE owner_sessions ADD COLUMN last_seen_at TEXT`,
+  // node_tree_id: which tree (node_trees row) the device was on when a
+  // reading arrived. vibration_rollup gets the same column, but because it
+  // is part of that table's PRIMARY KEY it is added by rebuilding the table
+  // (see migrateRollupPerTree below), not by an ALTER.
+  `ALTER TABLE vibration_events ADD COLUMN node_tree_id INTEGER`,
 ];
 
 // No top-level `await` here on purpose: esbuild can't compile top-level
@@ -273,6 +278,42 @@ const migrations = [
 // resulting promise as `ready` (awaited by server/index.js before any
 // request is handled) gets the exact same behavior without a literal
 // top-level `await` keyword.
+// vibration_rollup used to be keyed (piezo_sensor_id, bucket_ts). Each tree
+// now keeps its own history, so node_tree_id joins the key. SQLite cannot
+// change a primary key in place: copy into a new table (existing rows get
+// node_tree_id = 0, "predates trees" -- routes/owner.js re-files them under
+// the node's first tree the first time it is opened), then swap it in. Runs
+// only when the column is missing, so it is a no-op on every later start.
+async function migrateRollupPerTree() {
+  const info = await client.execute(`PRAGMA table_info(vibration_rollup)`);
+  if (info.rows.some((r) => String(r.name).toLowerCase() === 'node_tree_id')) return;
+  await client.executeMultiple(`
+    DROP TABLE IF EXISTS vibration_rollup_new;
+    CREATE TABLE vibration_rollup_new (
+      piezo_sensor_id TEXT    NOT NULL,
+      node_tree_id    INTEGER NOT NULL DEFAULT 0,
+      bucket_ts       INTEGER NOT NULL,
+      node_id         TEXT    NOT NULL,
+      readings        INTEGER NOT NULL DEFAULT 0,
+      grams_sum       REAL    NOT NULL DEFAULT 0,
+      grams_peak      REAL    NOT NULL DEFAULT 0,
+      hz_sum          REAL    NOT NULL DEFAULT 0,
+      hz_n            INTEGER NOT NULL DEFAULT 0,
+      pests           INTEGER NOT NULL DEFAULT 0,
+      critical        INTEGER NOT NULL DEFAULT 0,
+      elevated        INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (piezo_sensor_id, node_tree_id, bucket_ts)
+    ) WITHOUT ROWID;
+    INSERT INTO vibration_rollup_new
+      (piezo_sensor_id, node_tree_id, bucket_ts, node_id, readings, grams_sum, grams_peak, hz_sum, hz_n, pests, critical, elevated)
+    SELECT piezo_sensor_id, 0, bucket_ts, node_id, readings, grams_sum, grams_peak, hz_sum, hz_n, pests, critical, elevated
+      FROM vibration_rollup;
+    DROP TABLE vibration_rollup;
+    ALTER TABLE vibration_rollup_new RENAME TO vibration_rollup;
+  `);
+  console.log('[db] vibration_rollup rebuilt with node_tree_id');
+}
+
 async function initDb() {
   await db.exec(tablesSql);
 
@@ -303,6 +344,8 @@ async function initDb() {
     if (w.table && existingColumns[w.table]?.has(w.column)) continue; // already migrated
     try { await db.exec(w.sql); } catch { /* column already exists -- fine */ }
   }
+
+  await migrateRollupPerTree();
 
   if (indexesSql) await db.exec(indexesSql);
 

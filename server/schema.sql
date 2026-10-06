@@ -168,6 +168,24 @@ CREATE TABLE IF NOT EXISTS monitored_trees (
   row_hash                  TEXT
 );
 
+-- One row per TREE a master node has been placed on. A farm owner usually
+-- has far fewer devices than trees (e.g. 1 device, 50 trees), so the
+-- device is moved from tree to tree and each tree keeps its OWN monitor
+-- and recent log. Exactly one tree per node is is_active = 1: that is the
+-- tree new readings from the node are filed under (see routes/ingest.js).
+-- Switching trees only changes which one is active -- nothing is ever
+-- copied or deleted, so going back to an old tree shows its old data.
+CREATE TABLE IF NOT EXISTS node_trees (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id             TEXT NOT NULL REFERENCES master_nodes(id),
+  owner_id            TEXT REFERENCES farm_owners(id),
+  number              INTEGER NOT NULL,   -- 1, 2, 3 ... per node
+  name                TEXT NOT NULL,      -- "Tree 1"
+  is_active           INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT DEFAULT (datetime('now')),
+  row_hash            TEXT
+);
+
 -- Every raw reading a node/device sends in. Always written, regardless of
 -- severity or pest match -- this is what backs charts / "recent logs".
 CREATE TABLE IF NOT EXISTS vibration_events (
@@ -183,6 +201,9 @@ CREATE TABLE IF NOT EXISTS vibration_events (
   pest_likely         INTEGER DEFAULT 0,
   pest_clicks         INTEGER,
   pest_band_ratio     REAL,
+  -- Which node_trees row the device was on when this reading arrived.
+  -- NULL only for readings that predate trees (backfilled lazily).
+  node_tree_id        INTEGER,
   row_hash            TEXT
 );
 
@@ -342,6 +363,9 @@ CREATE TABLE IF NOT EXISTS superadmin_activity (
 -- (rollup.js), then pruned once older than the report window.
 CREATE TABLE IF NOT EXISTS vibration_rollup (
   piezo_sensor_id TEXT    NOT NULL,
+  -- node_trees.id the readings belong to (0 = predates trees). Part of the
+  -- key so each tree gets its own chart even on the same physical piezo.
+  node_tree_id    INTEGER NOT NULL DEFAULT 0,
   bucket_ts       INTEGER NOT NULL,  -- unix seconds at the START of the 15-min window
   node_id         TEXT    NOT NULL,
   readings        INTEGER NOT NULL DEFAULT 0,
@@ -352,7 +376,7 @@ CREATE TABLE IF NOT EXISTS vibration_rollup (
   pests           INTEGER NOT NULL DEFAULT 0,
   critical        INTEGER NOT NULL DEFAULT 0,
   elevated        INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (piezo_sensor_id, bucket_ts)
+  PRIMARY KEY (piezo_sensor_id, node_tree_id, bucket_ts)
 ) WITHOUT ROWID;
 
 -- ==INDEXES==
@@ -372,3 +396,7 @@ CREATE INDEX IF NOT EXISTS idx_owner_access_log_time ON owner_access_log(created
 CREATE INDEX IF NOT EXISTS idx_owners_confirm_token ON farm_owners(confirm_token_hash);
 CREATE INDEX IF NOT EXISTS idx_superadmin_sessions_sa ON superadmin_sessions(superadmin_id);
 CREATE INDEX IF NOT EXISTS idx_superadmin_activity_sa ON superadmin_activity(superadmin_id, created_at DESC);
+-- UNIQUE so two readings racing to create a node's first tree can't both win.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_node_trees_node ON node_trees(node_id, number);
+CREATE INDEX IF NOT EXISTS idx_node_trees_owner ON node_trees(owner_id);
+CREATE INDEX IF NOT EXISTS idx_vibration_events_tree ON vibration_events(node_tree_id, piezo_sensor_id, timestamp DESC);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   AlertTriangle,
@@ -28,6 +28,8 @@ interface PiezoDetail {
   piezoId: string;
   nodeId: string;
   nodeName: string;
+  treeId?: number | null;
+  treeName?: string | null;
   pin: string;
   piezoNumber: number;
   sensorLabel: string;
@@ -69,6 +71,10 @@ function relativeTime(iso: string): string {
 // strongest reading in each 15-minute window, so the whole week is there.
 export const PiezoDetailPage: React.FC = () => {
   const { piezoId } = useParams<{ piezoId: string }>();
+  // Which tree's readings to show (set by the tree the owner came from).
+  const [searchParams] = useSearchParams();
+  const treeParam = searchParams.get('tree');
+  const treeId = treeParam && Number.isFinite(Number(treeParam)) ? Number(treeParam) : null;
   const [data, setData] = useState<PiezoDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -76,24 +82,24 @@ export const PiezoDetailPage: React.FC = () => {
   const load = useCallback(() => {
     if (!piezoId) return;
     ownerApi
-      .piezoEvents(piezoId)
+      .piezoEvents(piezoId, treeId)
       .then((res: any) => {
         setData(res);
         setNotFound(false);
       })
       .catch(() => setNotFound(true));
-  }, [piezoId]);
+  }, [piezoId, treeId]);
 
   useEffect(() => {
     setLoading(true);
     setData(null);
     setNotFound(false);
     ownerApi
-      .piezoEvents(piezoId ?? '')
+      .piezoEvents(piezoId ?? '', treeId)
       .then((res: any) => setData(res))
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
-  }, [piezoId]);
+  }, [piezoId, treeId]);
 
   usePolling(load, 10000);
 
@@ -110,7 +116,7 @@ export const PiezoDetailPage: React.FC = () => {
         title={data ? data.sensorLabel : 'Piezo Transducer'}
         description={
           data
-            ? `Live readings from ${data.sensorLabel} (${data.pin}) on ${data.nodeName}. This view shows only this sensor's own vibration activity.`
+            ? `Live readings from ${data.sensorLabel} (${data.pin}) on ${data.nodeName}${data.treeName ? ` · ${data.treeName}` : ''}. This view shows only this sensor's own vibration activity.`
             : 'Live readings from this individual piezo transducer.'
         }
         actions={

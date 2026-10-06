@@ -4,6 +4,7 @@ import { severityForGrams, piezoSensorId, normalizePin, splitNodeAndPin } from '
 import { restampRowHash } from '../hash.js';
 import { notifyOwner } from '../notify.js';
 import { recordReading } from '../rollup.js';
+import { ensureActiveTree } from '../trees.js';
 
 // Alert History is a review queue, not a permanent archive -- capping
 // it keeps the admin/owner UI scrollable and the table from growing
@@ -113,6 +114,14 @@ router.post('/ingest-vibration', async (req, res) => {
   const nodeOwnerRow = await db.prepare(`SELECT owner_id FROM master_nodes WHERE id = ?`).get(node_id);
   const ownerId = nodeOwnerRow?.owner_id ?? null;
 
+  // The tree the device is currently placed on. Every reading is filed
+  // under it, so each tree keeps its own monitor and recent log (see
+  // server/trees.js). A node nobody owns yet has no tree -- its readings
+  // are filed under the owner's first tree once one links it.
+  const activeTree = await ensureActiveTree(node_id, ownerId);
+  const nodeTreeId = activeTree?.id ?? null;
+  const treeSuffix = activeTree ? ` (${activeTree.name})` : '';
+
   // Every master node always has exactly 4 piezo transducers, one per
   // analog input (A0-A3 -- see PIEZO_PINS in utils.js). Real firmware
   // that's only wired to one physical sensor may not send `piezo_id`
@@ -130,12 +139,13 @@ router.post('/ingest-vibration', async (req, res) => {
   // 1. Always log the raw reading -- this is what powers charts /
   //    "recent logs", independent of severity or pest match.
   const vibrationInsert = await db.prepare(
-    `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, node_tree_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sector ?? null,
     node_id,
     piezoSensorIdValue,
+    nodeTreeId,
     grams,
     severity,
     pestLikely ? 1 : 0,
@@ -152,6 +162,7 @@ router.post('/ingest-vibration', async (req, res) => {
     await recordReading(db, {
       piezoSensorId: piezoSensorIdValue,
       nodeId: node_id,
+      nodeTreeId,
       grams,
       pestLikely,
     });
@@ -159,21 +170,22 @@ router.post('/ingest-vibration', async (req, res) => {
     console.warn('[ingest] rollup update failed:', err.message);
   }
 
-  // Cap raw readings at 10 per sensor -- once a new reading pushes a
-  // sensor's count past 10, the oldest one for that sensor is dropped so
+  // Cap raw readings at 10 per sensor PER TREE -- once a new reading
+  // pushes that count past 10, the oldest one is dropped so
   // vibration_events stays a rolling window instead of growing forever.
-  // Scoped to piezo_sensor_id only -- alerts and notifications are
-  // untouched and keep accumulating normally.
+  // Scoped to the tree as well as the sensor so moving the device to a new
+  // tree never evicts the previous tree's recent log. Alerts and
+  // notifications are untouched and keep accumulating normally.
   await db.prepare(
     `DELETE FROM vibration_events
-     WHERE piezo_sensor_id = ?
+     WHERE piezo_sensor_id = ? AND node_tree_id IS ?
        AND id NOT IN (
          SELECT id FROM vibration_events
-         WHERE piezo_sensor_id = ?
+         WHERE piezo_sensor_id = ? AND node_tree_id IS ?
          ORDER BY timestamp DESC, id DESC
          LIMIT 10
        )`
-  ).run(piezoSensorIdValue, piezoSensorIdValue);
+  ).run(piezoSensorIdValue, nodeTreeId, piezoSensorIdValue, nodeTreeId);
 
   // Keep master_nodes' live health snapshot fresh if this node is already
   // registered. battery/signal are only touched when the device actually
@@ -214,7 +226,7 @@ router.post('/ingest-vibration', async (req, res) => {
       sector ?? null,
       node_id,
       severity.toUpperCase(),
-      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
+      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
       grams
     );
     await restampRowHash(db, 'alerts', 'id', impactInsert.lastInsertRowid);
@@ -223,7 +235,7 @@ router.post('/ingest-vibration', async (req, res) => {
     const impactResult = await notifyOwner(ownerId, {
       icon: 'alert-triangle',
       title: `${severity} Impact Detected`,
-      message: `${sector ?? node_id} (${node_id}) recorded a ${severity.toLowerCase()} vibration impact (${grams.toFixed(2)}g).`,
+      message: `${sector ?? node_id} (${node_id})${treeSuffix} recorded a ${severity.toLowerCase()} vibration impact (${grams.toFixed(2)}g).`,
       category: 'IMPACT',
       severity,
     });
@@ -237,7 +249,7 @@ router.post('/ingest-vibration', async (req, res) => {
   //    Also throttled per-node -- see cooldown note above.
   if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
     const pestDescription =
-      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
       (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
       (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : '');
 
@@ -255,7 +267,7 @@ router.post('/ingest-vibration', async (req, res) => {
     await capAlerts();
 
     // Admin-console-wide bell notification (audience='admin', unchanged).
-    const notificationMessage = `${sector ?? node_id} (${node_id}) matched a sustained feeding-pattern signature.`;
+    const notificationMessage = `${sector ?? node_id} (${node_id})${treeSuffix} matched a sustained feeding-pattern signature.`;
     const notificationInsert = await db.prepare(
       `INSERT INTO notifications (icon, title, message, category)
        VALUES (?, ?, ?, ?)`

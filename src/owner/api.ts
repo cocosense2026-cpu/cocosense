@@ -179,7 +179,18 @@ export const ownerApi = {
 
   dashboard: () => request<any>('/owner/dashboard'),
 
-  events: (sort: 'recent' | 'strongest') => request<any>(`/owner/events?sort=${sort}`),
+  events: (sort: 'recent' | 'strongest', treeId?: number | null) =>
+    request<any>(`/owner/events?sort=${sort}${treeId != null ? `&treeId=${treeId}` : ''}`),
+
+  // Trees the owner's device(s) have been placed on. Each tree keeps its own
+  // monitor + recent log; exactly one per node is "active" (receiving data).
+  trees: () => request<{ nodes: { id: string; name: string }[]; trees: any[] }>('/owner/trees'),
+  addTree: (nodeId?: string) =>
+    request<{ ok: true; tree: any; nodes: any[]; trees: any[] }>('/owner/trees', {
+      method: 'POST',
+      body: JSON.stringify({ nodeId }),
+    }),
+  activateTree: (id: number) => request<{ ok: true; tree: any }>(`/owner/trees/${id}/activate`, { method: 'POST' }),
 
   // Month-by-month vibration report. tz = minutes EAST of UTC so the server
   // cuts months at the owner's local midnight, not UTC's.
@@ -215,7 +226,8 @@ export const ownerApi = {
     return resp.blob();
   },
 
-  piezoEvents: (piezoId: string) => request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}`),
+  piezoEvents: (piezoId: string, treeId?: number | null) =>
+    request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}${treeId != null ? `?treeId=${treeId}` : ''}`),
 
   notifications: (filter: string) => request<{ notifications: any[]; activeAlertCount: number }>(
     `/owner/notifications?filter=${filter}`

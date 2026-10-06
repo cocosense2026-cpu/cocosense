@@ -58,6 +58,7 @@ const TABLE_COLUMNS = {
     'firmware_version', 'lat', 'lng', 'row_hash',
   ],
   piezo_sensors: ['id', 'node_id', 'tree_id', 'status', 'frequency_hz', 'voltage_mv', 'row_hash'],
+  node_trees: ['id', 'node_id', 'owner_id', 'number', 'name', 'is_active', 'created_at', 'row_hash'],
   monitored_trees: [
     'id', 'owner_id', 'sector', 'row', 'col', 'x', 'y', 'status', 'threat_score',
     'pest_detected', 'vibration_frequency_hz', 'vibration_grams', 'last_inspected',
@@ -65,7 +66,7 @@ const TABLE_COLUMNS = {
   ],
   vibration_events: [
     'id', 'sector', 'tree_id', 'node_id', 'piezo_sensor_id', 'grams', 'frequency_hz',
-    'severity', 'timestamp', 'pest_likely', 'pest_clicks', 'pest_band_ratio', 'row_hash',
+    'severity', 'timestamp', 'pest_likely', 'pest_clicks', 'pest_band_ratio', 'node_tree_id', 'row_hash',
   ],
   alerts: [
     'id', 'alert_type', 'title', 'sector', 'tree_id', 'node_id', 'pest', 'pest_type',

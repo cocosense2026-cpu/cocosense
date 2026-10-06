@@ -27,15 +27,15 @@ export function bucketStart(epochSec) {
 // Folds one reading into its 15-minute row. Safe under concurrent posts:
 // it is a single atomic UPSERT, so two readings landing in the same window
 // can't overwrite each other.
-export async function recordReading(db, { piezoSensorId, nodeId, grams, pestLikely, frequencyHz }) {
+export async function recordReading(db, { piezoSensorId, nodeId, nodeTreeId, grams, pestLikely, frequencyHz }) {
   const bucket = bucketStart(Math.floor(Date.now() / 1000));
   const hasHz = typeof frequencyHz === 'number' && Number.isFinite(frequencyHz);
   await db
     .prepare(
       `INSERT INTO vibration_rollup
-         (piezo_sensor_id, bucket_ts, node_id, readings, grams_sum, grams_peak, hz_sum, hz_n, pests, critical, elevated)
-       VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(piezo_sensor_id, bucket_ts) DO UPDATE SET
+         (piezo_sensor_id, node_tree_id, bucket_ts, node_id, readings, grams_sum, grams_peak, hz_sum, hz_n, pests, critical, elevated)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(piezo_sensor_id, node_tree_id, bucket_ts) DO UPDATE SET
          node_id    = excluded.node_id,
          readings   = readings + 1,
          grams_sum  = grams_sum + excluded.grams_sum,
@@ -48,6 +48,7 @@ export async function recordReading(db, { piezoSensorId, nodeId, grams, pestLike
     )
     .run(
       piezoSensorId,
+      nodeTreeId ?? 0,
       bucket,
       nodeId,
       grams,
@@ -77,7 +78,8 @@ export async function recordReading(db, { piezoSensorId, nodeId, grams, pestLike
 // number array plus a start time rather than {timestamp, grams, severity}
 // objects: the owner pages poll every 10 seconds, and this is ~25x smaller
 // (672 numbers for a week of 15-minute windows is about 3 KB).
-export async function weekPeaks(db, piezoSensorId, bucketMinutes = 15) {
+// `nodeTreeId` limits the chart to ONE tree's readings; omit it for every tree.
+export async function weekPeaks(db, piezoSensorId, bucketMinutes = 15, nodeTreeId = null) {
   const step = bucketMinutes * 60;
   const count = Math.round((7 * 24 * 60) / bucketMinutes);
   const nowIdx = Math.floor(Date.now() / 1000 / step);
@@ -86,10 +88,10 @@ export async function weekPeaks(db, piezoSensorId, bucketMinutes = 15) {
     .prepare(
       `SELECT CAST(bucket_ts / CAST(? AS INTEGER) AS INTEGER) AS idx, MAX(grams_peak) AS peak
          FROM vibration_rollup
-        WHERE piezo_sensor_id = ? AND bucket_ts >= ?
+        WHERE piezo_sensor_id = ? AND bucket_ts >= ?${nodeTreeId != null ? ' AND node_tree_id = ?' : ''}
         GROUP BY idx`
     )
-    .all(step, piezoSensorId, firstIdx * step);
+    .all(...[step, piezoSensorId, firstIdx * step, ...(nodeTreeId != null ? [nodeTreeId] : [])]);
   const peaks = new Array(count).fill(0);
   for (const r of rows) {
     const i = Number(r.idx) - firstIdx;

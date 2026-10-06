@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { toCamel, severityForGrams, validateAvatarDataUrl, PIEZO_PINS, piezoSensorId, applyDerivedNodeHealth, GRAMS_ELEVATED, GRAMS_CRITICAL } from '../utils.js';
 import { weekPeaks } from '../rollup.js';
+import { ensureActiveTree, createTree, activateTree, MAX_TREES_PER_NODE } from '../trees.js';
 import {
   verifyPassword,
   hashPassword,
@@ -692,6 +693,94 @@ router.post('/owner/nodes/link', requireOwnerAuth, async (req, res) => {
   res.status(201).json({ ok: true, node: linked });
 });
 
+// ========== Trees (owner-scoped) ==========
+// An owner usually has fewer devices than trees (e.g. 1 device, 50 trees).
+// A "tree" here is a spot the device has been placed: each one keeps its own
+// vibration monitor and recent log, and exactly one per node is active --
+// the one new readings are filed under (server/routes/ingest.js). Switching
+// only changes which tree is active, so an old tree's data is never lost.
+
+function publicTree(row, nodeName) {
+  return {
+    id: Number(row.id),
+    nodeId: row.node_id,
+    nodeName: nodeName ?? null,
+    number: Number(row.number),
+    name: row.name,
+    isActive: !!row.is_active,
+    createdAt: row.created_at,
+  };
+}
+
+async function listOwnerTrees(ownerId) {
+  const nodes = await db.prepare(`SELECT id, name FROM master_nodes WHERE owner_id = ? ORDER BY id`).all(ownerId);
+  // Every node gets its first tree (and its pre-trees readings) on first look.
+  for (const node of nodes) await ensureActiveTree(node.id, ownerId);
+  const nameById = Object.fromEntries(nodes.map((n) => [n.id, n.name]));
+  const rows = await db
+    .prepare(`SELECT * FROM node_trees WHERE owner_id = ? ORDER BY node_id, number`)
+    .all(ownerId);
+  return {
+    nodes: nodes.map((n) => ({ id: n.id, name: n.name })),
+    trees: rows.filter((r) => nameById[r.node_id]).map((r) => publicTree(r, nameById[r.node_id])),
+  };
+}
+
+router.get('/owner/trees', requireOwnerAuth, async (req, res) => {
+  res.json(await listOwnerTrees(req.ownerRow.id));
+});
+
+// "+ Tree": adds the next tree for a device and moves the device onto it, so
+// it starts with an empty monitor and an empty recent log.
+router.post('/owner/trees', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const owned = await db.prepare(`SELECT id FROM master_nodes WHERE owner_id = ? ORDER BY id`).all(ownerId);
+  if (owned.length === 0) {
+    return res.status(400).json({ ok: false, error: 'Link a master node first -- a tree needs a device to monitor it.' });
+  }
+  const requested = (req.body || {}).nodeId;
+  let nodeId = requested;
+  if (!nodeId) {
+    if (owned.length > 1) {
+      return res.status(400).json({ ok: false, error: 'Choose which master node this tree is for.' });
+    }
+    nodeId = owned[0].id;
+  }
+  if (!owned.some((n) => n.id === nodeId)) {
+    return res.status(404).json({ ok: false, error: 'That master node is not part of your account.' });
+  }
+
+  // Make sure the node's first tree exists before adding a second, so the
+  // readings it already had are filed under Tree 1 and not left behind.
+  await ensureActiveTree(nodeId, ownerId);
+  const count = (await db.prepare(`SELECT COUNT(*) AS n FROM node_trees WHERE node_id = ?`).get(nodeId)).n;
+  if (Number(count) >= MAX_TREES_PER_NODE) {
+    return res.status(409).json({ ok: false, error: `A master node can have up to ${MAX_TREES_PER_NODE} trees.` });
+  }
+
+  const id = await createTree(nodeId, ownerId, { activate: true });
+  const row = await db.prepare(`SELECT * FROM node_trees WHERE id = ?`).get(id);
+  await logActivity(ownerId, 'Added a tree', `${row.name} on ${nodeId}`);
+  res.status(201).json({ ok: true, tree: publicTree(row), ...(await listOwnerTrees(ownerId)) });
+});
+
+// Picking an existing tree = putting the device back on it: new readings are
+// filed under this tree from now on, and its old monitor/log are shown again.
+router.post('/owner/trees/:id/activate', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const tree = await db
+    .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ?`)
+    .get(Number(req.params.id), ownerId);
+  if (!tree) return res.status(404).json({ ok: false, error: 'Tree not found.' });
+
+  if (!tree.is_active) {
+    await activateTree(tree);
+    await logActivity(ownerId, 'Switched tree', `${tree.name} on ${tree.node_id}`);
+  }
+  const fresh = await db.prepare(`SELECT * FROM node_trees WHERE id = ?`).get(tree.id);
+  res.json({ ok: true, tree: publicTree(fresh) });
+});
+
 // ========== Vibration events (owner-scoped) ==========
 
 router.get('/owner/events', requireOwnerAuth, async (req, res) => {
@@ -700,9 +789,25 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 10, 100);
   const orderBy = sort === 'strongest' ? 'v.grams DESC' : 'v.timestamp DESC';
 
-  const nodes = toCamel(
+  let nodes = toCamel(
     await db.prepare(`SELECT id, name FROM master_nodes WHERE owner_id = ? ORDER BY id`).all(ownerId)
   );
+
+  // ?treeId= scopes the whole page to ONE tree (and therefore to the one
+  // device it belongs to). Without it, each node shows its currently active
+  // tree -- what the page showed before trees existed.
+  let selectedTree = null;
+  if (req.query.treeId != null && req.query.treeId !== '') {
+    selectedTree = await db
+      .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ?`)
+      .get(Number(req.query.treeId), ownerId);
+    if (!selectedTree) return res.status(404).json({ error: 'Tree not found for this owner.' });
+    nodes = nodes.filter((n) => n.id === selectedTree.node_id);
+  }
+  const treeByNode = {};
+  for (const node of nodes) {
+    treeByNode[node.id] = selectedTree ?? (await ensureActiveTree(node.id, ownerId));
+  }
 
   // One panel per PIEZO TRANSDUCER, not per master node -- every master
   // node always carries exactly 4 piezo_sensors, one per analog input
@@ -717,7 +822,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     `SELECT id, status FROM piezo_sensors WHERE node_id = ? ORDER BY id`
   );
   const recentStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY ${orderBy} LIMIT ?`
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.node_tree_id IS ? ORDER BY ${orderBy} LIMIT ?`
   );
   // `sparkline` is just the newest raw readings (vibration_events only
   // keeps 10 per sensor, so it can never cover a week) -- kept for older
@@ -726,7 +831,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   // bare number array because this endpoint is polled every 10 seconds
   // (168 numbers per card, not hundreds of row objects).
   const sparklineStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? ORDER BY v.timestamp DESC LIMIT 8`
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.node_tree_id IS ? ORDER BY v.timestamp DESC LIMIT 8`
   );
   const EVENTS_WEEK_BUCKET_MIN = 60;
 
@@ -748,11 +853,13 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     for (const sensor of sensors) {
       const pin = sensor.id.split('-').pop(); // e.g. "MN-COCO-0001-001-A2" -> "A2"
       const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
+      const tree = treeByNode[node.id];
+      const treeId = tree ? Number(tree.id) : null;
       const [rawRows, sparkRows, week] = enabled
         ? await Promise.all([
-            recentStmt.all(sensor.id, limit),
-            sparklineStmt.all(sensor.id),
-            weekPeaks(db, sensor.id, EVENTS_WEEK_BUCKET_MIN),
+            recentStmt.all(sensor.id, treeId, limit),
+            sparklineStmt.all(sensor.id, treeId),
+            weekPeaks(db, sensor.id, EVENTS_WEEK_BUCKET_MIN, treeId),
           ])
         : [[], [], null];
       const rows = toCamel(rawRows);
@@ -771,6 +878,8 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
         piezoId: sensor.id,
         nodeId: node.id,
         nodeName: node.name,
+        treeId,
+        treeName: tree?.name ?? null,
         pin,
         piezoNumber: pieceNum,
         sensorLabel: `Piezo ${pieceNum > 0 ? pieceNum : '?'}`,
@@ -792,21 +901,28 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   // disabled/damaged/not-connected transducer isn't reporting real
   // readings, so it shouldn't show up mixed into the owner's live log
   // feed.
-  const combinedLogs = toCamel(
-    await db
-      .prepare(
-        `SELECT v.* FROM vibration_events v
-         LEFT JOIN master_nodes n ON v.node_id = n.id
-         LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
-         WHERE n.owner_id = ? AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
-         ORDER BY ${orderBy} LIMIT ?`
+  // Only the tree(s) being shown, so a new tree starts with an empty log.
+  const shownTreeIds = Object.values(treeByNode).filter(Boolean).map((t) => Number(t.id));
+  const combinedLogs = shownTreeIds.length
+    ? toCamel(
+        await db
+          .prepare(
+            `SELECT v.* FROM vibration_events v
+             LEFT JOIN master_nodes n ON v.node_id = n.id
+             LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
+             WHERE n.owner_id = ? AND v.node_tree_id IN (${shownTreeIds.map(() => '?').join(',')})
+               AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
+             ORDER BY ${orderBy} LIMIT ?`
+          )
+          .all(ownerId, ...shownTreeIds, limit)
       )
-      .all(ownerId, limit)
-  );
+    : [];
   const combinedLatest = combinedLogs[0] ?? null;
 
+  const shownTree = selectedTree ?? (nodes.length === 1 ? treeByNode[nodes[0].id] : null);
   res.json({
     sort,
+    tree: shownTree ? publicTree(shownTree, nodes.find((n) => n.id === shownTree.node_id)?.name) : null,
     // Kept for any older client still reading the top-level shape --
     // mirrors the single strongest/most-recent reading across ALL of
     // the owner's working piezo units, same as this endpoint returned
@@ -856,11 +972,24 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
   const piezoNumber = PIEZO_PINS.indexOf(pin) + 1;
   const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
 
+  // Which tree's readings to show: ?treeId= (the tree card the owner came
+  // from), otherwise the tree the device is on right now.
+  let tree;
+  if (req.query.treeId != null && req.query.treeId !== '') {
+    tree = await db
+      .prepare(`SELECT * FROM node_trees WHERE id = ? AND owner_id = ? AND node_id = ?`)
+      .get(Number(req.query.treeId), ownerId, sensor.nodeId);
+    if (!tree) return res.status(404).json({ error: 'Tree not found for this sensor.' });
+  } else {
+    tree = await ensureActiveTree(sensor.nodeId, ownerId);
+  }
+  const treeId = tree ? Number(tree.id) : null;
+
   const logs = enabled
     ? toCamel(
         await db
-          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT ?`)
-          .all(sensor.id, RECENT_LIMIT)
+          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND node_tree_id IS ? ORDER BY timestamp DESC LIMIT ?`)
+          .all(sensor.id, treeId, RECENT_LIMIT)
       )
     : [];
   // The scrollable chart: the strongest reading in every 15-minute window
@@ -869,13 +998,13 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
   // a chatty sensor fills 500 rows in minutes, so "a week" was never a
   // week.) Sent as a bare number array -- 672 numbers, ~3 KB -- since this
   // page polls every 10 seconds.
-  const week = enabled ? await weekPeaks(db, sensor.id, 15) : null;
+  const week = enabled ? await weekPeaks(db, sensor.id, 15, treeId) : null;
   // Kept for older clients: the newest raw readings.
   const sparkline = enabled
     ? toCamel(
         await db
-          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? ORDER BY timestamp DESC LIMIT 20`)
-          .all(sensor.id)
+          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND node_tree_id IS ? ORDER BY timestamp DESC LIMIT 20`)
+          .all(sensor.id, treeId)
       ).reverse()
     : [];
   const latest = logs[0] ?? null;
@@ -884,6 +1013,8 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
     piezoId: sensor.id,
     nodeId: sensor.nodeId,
     nodeName: sensor.nodeName,
+    treeId,
+    treeName: tree?.name ?? null,
     pin,
     piezoNumber,
     sensorLabel: `Piezo ${piezoNumber > 0 ? piezoNumber : '?'}`,

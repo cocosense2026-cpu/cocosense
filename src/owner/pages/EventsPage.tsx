@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity } from 'lucide-react';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2 } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -30,6 +30,7 @@ interface EventPanel {
   piezoId: string;
   nodeId: string;
   nodeName: string;
+  treeId?: number | null;
   pin: string;
   sensorLabel: string;
   sensorStatus: string;
@@ -42,8 +43,18 @@ interface EventPanel {
   logs: EventRow[];
 }
 
+interface TreeInfo {
+  id: number;
+  nodeId: string;
+  nodeName: string | null;
+  number: number;
+  name: string;
+  isActive: boolean;
+}
+
 interface EventsData {
   sort: 'recent' | 'strongest';
+  tree?: TreeInfo | null;
   status: { grams: number; severity: string; sector: string };
   sparkline: EventRow[];
   thresholds?: Thresholds;
@@ -85,25 +96,125 @@ export const EventsPage: React.FC = () => {
   const [data, setData] = useState<EventsData | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // ---- Trees -------------------------------------------------------
+  // The owner's device is moved from tree to tree. Each tree keeps its own
+  // monitor + recent log, and the SELECTED tree is the one the device is
+  // placed on: picking it tells the server to file new readings under it.
+  const [nodes, setNodes] = useState<{ id: string; name: string }[]>([]);
+  const [trees, setTrees] = useState<TreeInfo[]>([]);
+  const [nodeId, setNodeId] = useState<string | null>(null);
+  const [treeId, setTreeId] = useState<number | null>(null);
+  const [treesReady, setTreesReady] = useState(false);
+  const [treeBusy, setTreeBusy] = useState(false);
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const treeIdRef = useRef<number | null>(null);
+  treeIdRef.current = treeId;
+  const selectedChipRef = useRef<HTMLButtonElement | null>(null);
+
   useEffect(() => {
+    let cancelled = false;
+    ownerApi
+      .trees()
+      .then((res) => {
+        if (cancelled) return;
+        setNodes(res.nodes);
+        setTrees(res.trees);
+        const first = res.nodes[0]?.id ?? null;
+        setNodeId(first);
+        setTreeId(res.trees.find((t: TreeInfo) => t.nodeId === first && t.isActive)?.id ?? null);
+      })
+      .catch(() => void 0)
+      .finally(() => !cancelled && setTreesReady(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Keep the selected tree's chip in view -- with 50 trees the row scrolls.
+  useEffect(() => {
+    selectedChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }, [treeId, trees.length]);
+
+  const nodeTrees = trees.filter((t) => t.nodeId === nodeId);
+  const currentTree = trees.find((t) => t.id === treeId) ?? null;
+
+  const selectTree = async (tree: TreeInfo) => {
+    if (treeBusy || tree.id === treeId) return;
+    const previous = treeId;
+    setTreeError(null);
+    setTreeBusy(true);
+    setData(null);
+    setLoading(true);
+    setTreeId(tree.id);
+    try {
+      await ownerApi.activateTree(tree.id);
+      setTrees((all) => all.map((t) => (t.nodeId === tree.nodeId ? { ...t, isActive: t.id === tree.id } : t)));
+    } catch (err: any) {
+      setTreeId(previous);
+      setTreeError(err?.message || "Couldn't switch trees. Please try again.");
+    } finally {
+      setTreeBusy(false);
+    }
+  };
+
+  const addTree = async () => {
+    if (treeBusy) return;
+    setTreeError(null);
+    setTreeBusy(true);
+    try {
+      const res = await ownerApi.addTree(nodeId ?? undefined);
+      setData(null);
+      setLoading(true);
+      setNodes(res.nodes);
+      setTrees(res.trees);
+      setNodeId(res.tree.nodeId);
+      setTreeId(res.tree.id);
+    } catch (err: any) {
+      setTreeError(err?.message || "Couldn't add a tree. Please try again.");
+    } finally {
+      setTreeBusy(false);
+    }
+  };
+
+  const selectNode = (id: string) => {
+    if (id === nodeId || treeBusy) return;
+    const target = trees.find((t) => t.nodeId === id && t.isActive) ?? trees.find((t) => t.nodeId === id);
+    setNodeId(id);
+    if (target) {
+      setData(null);
+      setLoading(true);
+      setTreeId(target.id);
+    }
+  };
+
+  useEffect(() => {
+    if (!treesReady) return;
     let cancelled = false;
     setLoading(true);
     ownerApi
-      .events(sort)
+      .events(sort, treeId)
       .then((res) => !cancelled && setData(res))
       .catch(() => void 0)
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [sort]);
+  }, [sort, treeId, treesReady]);
 
   // Keeps this page current with new device readings as they arrive,
   // without the visible loading spinner flashing on every refresh --
-  // only the initial load (above) shows that.
+  // only the initial load (above) shows that. A response for a tree the
+  // owner has since switched away from is dropped, never shown.
   const refresh = useCallback(() => {
-    ownerApi.events(sort).then(setData).catch(() => void 0);
-  }, [sort]);
+    if (!treesReady) return;
+    const asked = treeId;
+    ownerApi
+      .events(sort, asked)
+      .then((res) => {
+        if (treeIdRef.current === asked) setData(res);
+      })
+      .catch(() => void 0);
+  }, [sort, treeId, treesReady]);
   usePolling(refresh, 10000);
 
   const style = SEVERITY_STYLES[data?.status.severity ?? 'Normal'] || SEVERITY_STYLES.Normal;
@@ -139,6 +250,73 @@ export const EventsPage: React.FC = () => {
         title="Vibration Events"
         description="Live sensor activity across your monitored trees. Every reading is stamped as it arrives over the mesh so you can spot a spike the moment it happens, not after canopy damage becomes visible."
       />
+
+      {/* Tree selector -- "+ Tree" first, then every tree this device has
+          been placed on. Choosing one puts the device on that tree. */}
+      {nodes.length > 0 && (
+        <div className="space-y-3">
+          {nodes.length > 1 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] uppercase font-bold tracking-widest text-[#808080]">Master node</span>
+              {nodes.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => selectNode(n.id)}
+                  className={`px-2.5 py-1 rounded text-[11px] font-semibold border transition-colors ${
+                    n.id === nodeId
+                      ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
+                      : 'bg-[#141414] text-[#A0A0A0] border-[#262626] hover:text-white'
+                  }`}
+                >
+                  {n.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-stretch gap-2">
+            <button
+              type="button"
+              onClick={addTree}
+              disabled={treeBusy}
+              className="flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#E2BE4A] disabled:opacity-60 text-black text-xs font-bold transition-colors"
+            >
+              {treeBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Tree
+            </button>
+            <div className="flex-1 min-w-0 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">
+              {nodeTrees.map((t) => {
+                const selected = t.id === treeId;
+                return (
+                  <button
+                    key={t.id}
+                    ref={selected ? selectedChipRef : undefined}
+                    type="button"
+                    onClick={() => selectTree(t)}
+                    disabled={treeBusy}
+                    aria-pressed={selected}
+                    className={`flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-xs font-semibold whitespace-nowrap transition-colors ${
+                      selected
+                        ? 'bg-[#1F1B0E] border-[#D4AF37] text-[#D4AF37]'
+                        : 'bg-[#141414] border-[#262626] text-[#A0A0A0] hover:text-white hover:border-[#404040]'
+                    }`}
+                  >
+                    <TreePalm className="w-3.5 h-3.5" /> {t.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {treeError && <p className="text-[11px] text-[#F44336]">{treeError}</p>}
+          {currentTree && (
+            <p className="text-[11px] text-[#808080]">
+              Your device is monitoring <span className="text-white font-semibold">{currentTree.name}</span>. New
+              readings are saved to this tree; tap another tree to move the device back to it and see its earlier data.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Current status */}
       <div className="rounded-lg bg-[#141414] border border-[#262626] p-5 sm:p-6">
@@ -188,7 +366,7 @@ export const EventsPage: React.FC = () => {
             return (
               <Link
                 key={panel.piezoId}
-                to={`/owner/events/piezo/${encodeURIComponent(panel.piezoId)}`}
+                to={`/owner/events/piezo/${encodeURIComponent(panel.piezoId)}${panel.treeId != null ? `?tree=${panel.treeId}` : ''}`}
                 className={`block rounded-lg border p-5 sm:p-6 transition-all ${
                   panel.enabled
                     ? 'bg-[#141414] border-[#262626] hover:border-[#D4AF37]/50'
@@ -308,7 +486,7 @@ export const EventsPage: React.FC = () => {
               ))}
             </div>
           ) : !data?.logs.length ? (
-            <div className="p-8 text-center text-xs text-[#808080]">No vibration events recorded yet.</div>
+            <div className="p-8 text-center text-xs text-[#808080]">No vibration events recorded yet{currentTree ? ` for ${currentTree.name}` : ''}.</div>
           ) : (
             data.logs.map((log) => {
               const tone = SEVERITY_STYLES[log.severity] || SEVERITY_STYLES.Normal;
