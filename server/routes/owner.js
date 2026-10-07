@@ -971,13 +971,13 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
     if (sensors.length === 0) {
       sensors = PIEZO_PINS.map((pin) => ({
         id: piezoSensorId(node.id, pin),
-        status: pin === 'A3' ? 'NOT_CONNECTED' : 'OPTIMAL',
+        status: 'OPTIMAL',
       }));
     }
 
     for (const sensor of sensors) {
       const pin = sensor.id.split('-').pop(); // e.g. "MN-COCO-0001-001-A2" -> "A2"
-      const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
+      const enabled = sensor.status !== 'DAMAGED';
       const tree = treeByNode[node.id];
       const treeId = tree ? Number(tree.id) : null;
       const [rawRows, sparkRows, week] = enabled
@@ -1037,7 +1037,7 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
              LEFT JOIN master_nodes n ON v.node_id = n.id
              LEFT JOIN piezo_sensors p ON v.piezo_sensor_id = p.id
              WHERE n.owner_id = ? AND v.node_tree_id IN (${shownTreeIds.map(() => '?').join(',')})
-               AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
+               AND (p.status IS NULL OR p.status <> 'DAMAGED')
              ORDER BY ${orderBy} LIMIT ?`
           )
           .all(ownerId, ...shownTreeIds, limit)
@@ -1096,7 +1096,7 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
 
   const pin = sensor.id.split('-').pop();
   const piezoNumber = PIEZO_PINS.indexOf(pin) + 1;
-  const enabled = sensor.status !== 'DAMAGED' && sensor.status !== 'NOT_CONNECTED';
+  const enabled = sensor.status !== 'DAMAGED';
 
   // Which tree's readings to show: ?treeId= (the tree card the owner came
   // from), otherwise the tree the device is on right now.

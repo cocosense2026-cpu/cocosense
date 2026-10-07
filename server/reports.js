@@ -62,7 +62,7 @@ function baseSql(scope, range) {
       ${scope.join}
       LEFT JOIN piezo_sensors p ON r.piezo_sensor_id = p.id
      WHERE ${scope.where}
-       AND (p.status IS NULL OR p.status NOT IN ('DAMAGED', 'NOT_CONNECTED'))
+       AND (p.status IS NULL OR p.status <> 'DAMAGED')
        AND ${range}`;
 }
 
