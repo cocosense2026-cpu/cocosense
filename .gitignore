@@ -10,3 +10,5 @@ server/data/
 
 # Local Netlify folder
 .netlify
+
+secrets.h

@@ -23,13 +23,16 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-// ---- WiFi ----
-static const char *WIFI_SSID = "curlie";
-static const char *WIFI_PASSWORD = "12345678";
-
-// ---- Server ----
-static const char *SERVER_URL = "https://cocosense2026.netlify.app/api/ingest-vibration";
-static const char *DEVICE_API_KEY = "Luna-1327"; // must match DEVICE_API_KEY in server/.env
+// ---- WiFi / Server / API key ----
+// Kept OUT of this file on purpose: Netlify's secrets scanner fails the
+// build if DEVICE_API_KEY (or the portal URL) appears in any file in the
+// repo. They live in secrets.h, which is git-ignored. Copy
+// secrets.h.example to secrets.h and fill it in.
+#include "secrets.h"
+static const char *WIFI_SSID = SECRET_WIFI_SSID;
+static const char *WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
+static const char *SERVER_URL = SECRET_SERVER_URL;
+static const char *DEVICE_API_KEY = SECRET_DEVICE_API_KEY; // must match DEVICE_API_KEY in Netlify env
 
 // ---- Radio ----
 #define LORA_SCK  18
