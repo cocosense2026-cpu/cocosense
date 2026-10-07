@@ -58,38 +58,81 @@ async function recentlyAlerted(nodeId, alertType, cooldownMs) {
   return ageMs < cooldownMs;
 }
 
-// The ESP32 firmware already POSTs this exact JSON shape:
-//   { api_key, node_id, sector, grams, battery, rssi, pest_likely, pest_clicks, pest_band_ratio }
-// so this endpoint is a drop-in target -- just change serverURL in the
-// sketch to point here (see README "Connecting the device"). `battery`
-// and `rssi` are optional -- omit them and the node's existing values
-// are left untouched.
-router.post('/ingest-vibration', async (req, res) => {
-  // TEMP DIAGNOSTIC: shows exactly what the gateway sends (Netlify function logs).
-  console.log('[ingest] raw body', JSON.stringify({ ...(req.body || {}), api_key: undefined }));
-  const {
-    api_key,
-    node_id: rawNodeId,
-    piezo_id,
-    // The LoRa gateway relays the mesh node's raw packet field name
-    // as-is: `pin` (e.g. "A0" / "A1"), not the full `piezo_id` string
-    // this endpoint originally expected (e.g. "MN-STOCK-0001-A1").
-    // Without this, every reading silently fell back to that node's A0
-    // sensor regardless of which physical piezo it actually came from
-    // -- see piezoSensorIdValue below.
-    pin: rawPin,
-    sector,
-    grams,
-    battery,
-    rssi,
-    pest_likely,
-    pest_clicks,
-    pest_band_ratio,
-  } = req.body || {};
+// Accepted payloads (both work):
+//
+//  1) BATCH -- what the base station now sends, ONE request per LoRa packet:
+//       { api_key, node_id, sector, battery, rssi,
+//         readings: [ { pin:"A0", grams, pest_likely, pest_clicks }, ... up to 4 ] }
+//
+//  2) SINGLE (legacy, older firmware):
+//       { api_key, node_id, sector, grams, battery, rssi, pin | piezo_id,
+//         pest_likely, pest_clicks, pest_band_ratio }
+//
+// Why batch: the gateway used to make 4 separate HTTPS requests per second,
+// and every request paid for ~13 sequential round trips to the database.
+// That is slower than 1 second, so the gateway's queue backed up and
+// readings arrived minutes late (or were dropped). Now the node/tree/piezo
+// lookups happen ONCE per packet, the per-piezo writes run in parallel,
+// and the raw-log trim only runs every few readings.
+const MAX_READINGS_PER_REQUEST = 8;
+const TRIM_EVERY_N_READINGS = 10;
+const RAW_RETENTION_PER_SENSOR = 600; // ~10 min of per-second readings per sensor
+const trimCounters = new Map(); // per warm function instance; harmless if reset
 
-  const split = rawNodeId ? splitNodeAndPin(rawNodeId) : { nodeId: rawNodeId, pin: null };
-  const node_id = split.nodeId;
-  const pin = rawPin ?? split.pin;
+async function storeReading(r, { node_id, nodeTreeId }) {
+  const vibrationInsert = await db.prepare(
+    `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, node_tree_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    r.sector ?? null,
+    node_id,
+    r.piezoSensorIdValue,
+    nodeTreeId,
+    r.grams,
+    r.severity,
+    r.pestLikely ? 1 : 0,
+    r.pest_clicks ?? null,
+    r.pest_band_ratio ?? null
+  );
+
+  // Independent of each other once the row exists, so run together.
+  await Promise.all([
+    restampRowHash(db, 'vibration_events', 'id', vibrationInsert.lastInsertRowid),
+    // A rollup failure must never drop the reading itself.
+    recordReading(db, {
+      piezoSensorId: r.piezoSensorIdValue,
+      nodeId: node_id,
+      nodeTreeId,
+      grams: r.grams,
+      pestLikely: r.pestLikely,
+    }).catch((err) => console.warn('[ingest] rollup update failed:', err.message)),
+  ]);
+
+  // Rolling window: trim only every Nth reading per sensor instead of on
+  // every single one (saves a DB round trip per reading; the table may
+  // briefly hold a few rows over the cap, which is harmless).
+  const key = `${r.piezoSensorIdValue}|${nodeTreeId}`;
+  const n = (trimCounters.get(key) ?? 0) + 1;
+  if (n >= TRIM_EVERY_N_READINGS) {
+    trimCounters.set(key, 0);
+    await db.prepare(
+      `DELETE FROM vibration_events
+       WHERE piezo_sensor_id = ? AND node_tree_id IS ?
+         AND id NOT IN (
+           SELECT id FROM vibration_events
+           WHERE piezo_sensor_id = ? AND node_tree_id IS ?
+           ORDER BY timestamp DESC, id DESC
+           LIMIT ?
+         )`
+    ).run(r.piezoSensorIdValue, nodeTreeId, r.piezoSensorIdValue, nodeTreeId, RAW_RETENTION_PER_SENSOR);
+  } else {
+    trimCounters.set(key, n);
+  }
+}
+
+router.post('/ingest-vibration', async (req, res) => {
+  const body = req.body || {};
+  const { api_key, node_id: rawNodeId, sector, battery, rssi } = body;
 
   const expectedKey = process.env.DEVICE_API_KEY;
   if (!expectedKey) {
@@ -98,217 +141,156 @@ router.post('/ingest-vibration', async (req, res) => {
   if (!api_key || api_key !== expectedKey) {
     return res.status(401).json({ ok: false, error: 'invalid api_key' });
   }
-  if (typeof grams !== 'number' || Number.isNaN(grams)) {
-    return res.status(400).json({ ok: false, error: 'grams (number) is required' });
-  }
+
+  const split = rawNodeId ? splitNodeAndPin(rawNodeId) : { nodeId: rawNodeId, pin: null };
+  const node_id = split.nodeId;
   if (!node_id) {
     return res.status(400).json({ ok: false, error: 'node_id is required' });
   }
 
-  const severity = severityForGrams(grams);
-  const pestLikely = !!pest_likely;
+  // Normalise both payload shapes into one list of readings.
+  const rawReadings = Array.isArray(body.readings)
+    ? body.readings.slice(0, MAX_READINGS_PER_REQUEST)
+    : [{
+        piezo_id: body.piezo_id,
+        pin: body.pin ?? split.pin,
+        grams: body.grams,
+        pest_likely: body.pest_likely,
+        pest_clicks: body.pest_clicks,
+        pest_band_ratio: body.pest_band_ratio,
+      }];
 
-  // Which farm owner this node belongs to -- needed to route the alert
-  // through that owner's Settings page toggles (Email/SMS/Push/Critical-
-  // Only). A node not yet assigned to an owner just skips delivery.
+  const readings = [];
+  for (const raw of rawReadings) {
+    if (!raw || typeof raw.grams !== 'number' || Number.isNaN(raw.grams)) continue;
+    const normalizedPin = normalizePin(raw.pin ?? split.pin);
+    if (!raw.piezo_id && normalizedPin == null) {
+      console.warn('[ingest] unrecognised/missing pin', JSON.stringify(raw.pin), 'from', node_id, '-> defaulting to A0');
+    }
+    readings.push({
+      sector,
+      grams: raw.grams,
+      severity: severityForGrams(raw.grams),
+      pestLikely: !!raw.pest_likely,
+      pest_clicks: raw.pest_clicks,
+      pest_band_ratio: raw.pest_band_ratio,
+      piezoSensorIdValue: raw.piezo_id || piezoSensorId(node_id, normalizedPin || 'A0'),
+    });
+  }
+  if (!readings.length) {
+    return res.status(400).json({ ok: false, error: 'at least one reading with numeric grams is required' });
+  }
+
+  // ---- Once per packet (was once per piezo) ----
   const nodeOwnerRow = await db.prepare(`SELECT owner_id FROM master_nodes WHERE id = ?`).get(node_id);
   const ownerId = nodeOwnerRow?.owner_id ?? null;
 
-  // The tree the device is currently placed on. Every reading is filed
-  // under it, so each tree keeps its own monitor and recent log (see
-  // server/trees.js). A node nobody owns yet has no tree -- its readings
-  // are filed under the owner's first tree once one links it.
   const activeTree = await ensureActiveTree(node_id, ownerId);
   const nodeTreeId = activeTree?.id ?? null;
   const treeSuffix = activeTree ? ` (${activeTree.name})` : '';
 
-  // Every master node always has exactly 4 piezo transducers, one per
-  // analog input (A0-A3 -- see PIEZO_PINS in utils.js). Real firmware
-  // that's only wired to one physical sensor may not send `piezo_id`
-  // at all -- in that case, attribute the reading to that node's A0
-  // input (its default/primary transducer) so it still lands on a
-  // specific Vibration Events panel instead of being orphaned, while
-  // multi-sensor firmware can report each transducer separately by
-  // passing its real piezo_id (e.g. "MN-N1-A2").
-  const normalizedPin = normalizePin(pin);
-  if (!piezo_id && normalizedPin == null) {
-    console.warn('[ingest] unrecognised/missing pin', JSON.stringify(pin), 'from', node_id, '-> defaulting to A0');
-  }
-  const piezoSensorIdValue = piezo_id || piezoSensorId(node_id, normalizedPin || 'A0');
-
-  // The owner can switch a piezo off for a tree (e.g. the tree is dead).
-  // While the device is on that tree, readings from that piezo are not
-  // recorded and raise no alerts -- but the node's own heartbeat (battery,
-  // signal, online) below is still updated, since the node itself is fine.
-  let piezoOff = false;
+  // Which piezos the owner switched off for this tree -- one query for all.
+  const offSensors = new Set();
   if (nodeTreeId != null) {
-    const st = await db
-      .prepare(`SELECT is_active FROM tree_piezo_state WHERE node_tree_id = ? AND piezo_sensor_id = ?`)
-      .get(nodeTreeId, piezoSensorIdValue);
-    piezoOff = !!st && Number(st.is_active) === 0;
+    const rows = await db
+      .prepare(`SELECT piezo_sensor_id FROM tree_piezo_state WHERE node_tree_id = ? AND is_active = 0`)
+      .all(nodeTreeId);
+    for (const row of rows) offSensors.add(row.piezo_sensor_id);
   }
+  for (const r of readings) r.piezoOff = offSensors.has(r.piezoSensorIdValue);
 
-  // 1. Always log the raw reading -- this is what powers charts /
-  //    "recent logs", independent of severity or pest match.
-  if (!piezoOff) {
-  const vibrationInsert = await db.prepare(
-    `INSERT INTO vibration_events (sector, node_id, piezo_sensor_id, node_tree_id, grams, severity, pest_likely, pest_clicks, pest_band_ratio)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    sector ?? null,
-    node_id,
-    piezoSensorIdValue,
-    nodeTreeId,
-    grams,
-    severity,
-    pestLikely ? 1 : 0,
-    pest_clicks ?? null,
-    pest_band_ratio ?? null
-  );
-  await restampRowHash(db, 'vibration_events', 'id', vibrationInsert.lastInsertRowid);
-
-  // The raw table below is only a 10-reading window, so also fold this
-  // reading into the long-term 15-minute rollup -- that is what the week
-  // chart and the monthly report/download are built from. A failure here
-  // must never drop the reading itself, so it is logged and swallowed.
-  try {
-    await recordReading(db, {
-      piezoSensorId: piezoSensorIdValue,
-      nodeId: node_id,
-      nodeTreeId,
-      grams,
-      pestLikely,
-    });
-  } catch (err) {
-    console.warn('[ingest] rollup update failed:', err.message);
-  }
-
-  // Cap raw readings at RAW_RETENTION_PER_SENSOR per sensor PER TREE --
-  // once a new reading pushes that count past the cap, the oldest one is
-  // dropped so vibration_events stays a rolling window instead of growing
-  // forever. Scoped to the tree as well as the sensor so moving the device
-  // to a new tree never evicts the previous tree's recent log. Alerts and
-  // notifications are untouched and keep accumulating normally.
-  //
-  // Raised from 10 -> 600: with the Master Node now reporting once per
-  // second, a cap of 10 only ever held the last 10 SECONDS of raw history,
-  // which made a "zoom in and see every second" view on the dashboard
-  // impossible -- there was nothing left to zoom into. 600 rows holds a
-  // full 10 minutes of per-second readings per sensor, which is enough to
-  // scroll/zoom through while keeping the table small.
-  const RAW_RETENTION_PER_SENSOR = 600;
-  await db.prepare(
-    `DELETE FROM vibration_events
-     WHERE piezo_sensor_id = ? AND node_tree_id IS ?
-       AND id NOT IN (
-         SELECT id FROM vibration_events
-         WHERE piezo_sensor_id = ? AND node_tree_id IS ?
-         ORDER BY timestamp DESC, id DESC
-         LIMIT ?
-       )`
-  ).run(piezoSensorIdValue, nodeTreeId, piezoSensorIdValue, nodeTreeId, RAW_RETENTION_PER_SENSOR);
-  }
-
-  // Keep master_nodes' live health snapshot fresh if this node is already
-  // registered. battery/signal are only touched when the device actually
-  // sent them -- COALESCE keeps whatever was there before otherwise, so
-  // an older/simpler sketch that only sends grams doesn't blank them out.
   const batteryPercent = battery != null ? Math.max(0, Math.min(100, Math.round(Number(battery)))) : null;
   const signalRssi = rssi != null ? signalLabelFor(Math.round(Number(rssi))) : null;
 
-  await db.prepare(
-    `UPDATE master_nodes
-     SET last_ping = datetime('now'),
-         online = 1,
-         battery_percent = COALESCE(?, battery_percent),
-         signal_rssi = COALESCE(?, signal_rssi)
-     WHERE id = ?`
-  ).run(batteryPercent, signalRssi, node_id);
-  await restampRowHash(db, 'master_nodes', 'id', node_id);
+  // ---- Writes: all piezos + the node heartbeat in parallel ----
+  await Promise.all([
+    ...readings.filter((r) => !r.piezoOff).map((r) => storeReading(r, { node_id, nodeTreeId })),
+    (async () => {
+      await db.prepare(
+        `UPDATE master_nodes
+         SET last_ping = datetime('now'),
+             online = 1,
+             battery_percent = COALESCE(?, battery_percent),
+             signal_rssi = COALESCE(?, signal_rssi)
+         WHERE id = ?`
+      ).run(batteryPercent, signalRssi, node_id);
+      await restampRowHash(db, 'master_nodes', 'id', node_id);
+    })(),
+  ]);
 
-  // Tracks whether the owner's on-site buzzer should sound for THIS
-  // request specifically -- the device gets it back in the response
-  // below, since a synchronous reply to its own POST is the only way
-  // this system can reach the physical hardware right now (see
-  // notify.js's notifyOwner for why it's decided there).
+  // ---- Alerts: sequential on purpose, so the per-node cooldown check sees
+  //      an alert inserted by an earlier piezo in this same packet ----
   let buzzer = false;
+  for (const r of readings) {
+    if (r.piezoOff) continue;
+    const { grams, severity, pestLikely, piezoSensorIdValue, pest_clicks, pest_band_ratio } = r;
 
-  // 2. Impact/tamper alert -- logged for ANY non-normal hit, regardless
-  //    of pest match. Always recorded to Alert History; also fanned out
-  //    to the owner's chosen channels (respecting their Settings page
-  //    toggles) for Elevated/Critical hits, same cooldown as the alert
-  //    itself so it can't spam a channel any faster than Alert History
-  //    already throttles to.
-  if (!piezoOff && severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
-    const impactInsert = await db.prepare(
-      `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
-       VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
-    ).run(
-      `${severity} Impact Detected`,
-      sector ?? null,
-      node_id,
-      severity.toUpperCase(),
-      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
-      grams
-    );
-    await restampRowHash(db, 'alerts', 'id', impactInsert.lastInsertRowid);
-    await capAlerts();
+    if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
+      const impactInsert = await db.prepare(
+        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
+         VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
+      ).run(
+        `${severity} Impact Detected`,
+        sector ?? null,
+        node_id,
+        severity.toUpperCase(),
+        `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
+        grams
+      );
+      await restampRowHash(db, 'alerts', 'id', impactInsert.lastInsertRowid);
+      await capAlerts();
 
-    const impactResult = await notifyOwner(ownerId, {
-      icon: 'alert-triangle',
-      title: `${severity} Impact Detected`,
-      message: `${sector ?? node_id} (${node_id})${treeSuffix} recorded a ${severity.toLowerCase()} vibration impact (${grams.toFixed(2)}g).`,
-      category: 'IMPACT',
-      severity,
-    });
-    buzzer = buzzer || impactResult.buzzer;
+      const impactResult = await notifyOwner(ownerId, {
+        icon: 'alert-triangle',
+        title: `${severity} Impact Detected`,
+        message: `${sector ?? node_id} (${node_id})${treeSuffix} recorded a ${severity.toLowerCase()} vibration impact (${grams.toFixed(2)}g).`,
+        category: 'IMPACT',
+        severity,
+      });
+      buzzer = buzzer || impactResult.buzzer;
+    }
+
+    if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
+      const pestDescription =
+        `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
+        (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
+        (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : '');
+
+      const pestInsert = await db.prepare(
+        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
+         VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
+      ).run('Pest Feeding Pattern Detected', sector ?? null, node_id, pestDescription, grams);
+      await restampRowHash(db, 'alerts', 'id', pestInsert.lastInsertRowid);
+      await capAlerts();
+
+      const notificationMessage = `${sector ?? node_id} (${node_id})${treeSuffix} matched a sustained feeding-pattern signature.`;
+      const notificationInsert = await db.prepare(
+        `INSERT INTO notifications (icon, title, message, category)
+         VALUES (?, ?, ?, ?)`
+      ).run('alert-triangle', 'Pest Feeding Pattern Detected', notificationMessage, 'PEST');
+      await restampRowHash(db, 'notifications', 'id', notificationInsert.lastInsertRowid);
+
+      const pestResult = await notifyOwner(ownerId, {
+        icon: 'alert-triangle',
+        title: 'Pest Feeding Pattern Detected',
+        message: notificationMessage,
+        category: 'PEST',
+        severity: 'Critical',
+      });
+      buzzer = buzzer || pestResult.buzzer;
+    }
   }
 
-  // 3. Pest alert + notification -- deliberately SEPARATE from the impact
-  //    check above. Only a real feeding-pattern match creates a
-  //    notification (bell icon) / would light up a pest-only dashboard
-  //    banner; an ordinary knock never does, even if it's severe.
-  //    Also throttled per-node -- see cooldown note above.
-  if (!piezoOff && pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
-    const pestDescription =
-      `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
-      (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
-      (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : '');
-
-    const pestInsert = await db.prepare(
-      `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
-       VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
-    ).run(
-      'Pest Feeding Pattern Detected',
-      sector ?? null,
-      node_id,
-      pestDescription,
-      grams
-    );
-    await restampRowHash(db, 'alerts', 'id', pestInsert.lastInsertRowid);
-    await capAlerts();
-
-    // Admin-console-wide bell notification (audience='admin', unchanged).
-    const notificationMessage = `${sector ?? node_id} (${node_id})${treeSuffix} matched a sustained feeding-pattern signature.`;
-    const notificationInsert = await db.prepare(
-      `INSERT INTO notifications (icon, title, message, category)
-       VALUES (?, ?, ?, ?)`
-    ).run('alert-triangle', 'Pest Feeding Pattern Detected', notificationMessage, 'PEST');
-    await restampRowHash(db, 'notifications', 'id', notificationInsert.lastInsertRowid);
-
-    // Owner-scoped fan-out (bell/email/SMS per that owner's Settings
-    // toggles) -- pest detections are always treated as Critical.
-    const pestResult = await notifyOwner(ownerId, {
-      icon: 'alert-triangle',
-      title: 'Pest Feeding Pattern Detected',
-      message: notificationMessage,
-      category: 'PEST',
-      severity: 'Critical',
-    });
-    buzzer = buzzer || pestResult.buzzer;
-  }
-
-  res.json({ ok: true, severity, pest_likely: pestLikely, buzzer, ...(piezoOff ? { ignored: true } : {}) });
+  const rank = { Normal: 0, Elevated: 1, Critical: 2 };
+  const worst = readings.reduce((a, r) => (rank[r.severity] > rank[a] ? r.severity : a), 'Normal');
+  res.json({
+    ok: true,
+    severity: worst,
+    pest_likely: readings.some((r) => r.pestLikely),
+    buzzer,
+    stored: readings.filter((r) => !r.piezoOff).length,
+    ...(readings.every((r) => r.piezoOff) ? { ignored: true } : {}),
+  });
 });
 
 export default router;

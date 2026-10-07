@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -85,26 +85,59 @@ export const PiezoDetailPage: React.FC = () => {
   // Live since seeing every second is the point of this toggle.
   const [chartMode, setChartMode] = useState<'live' | 'week'>('live');
 
+  // A transient failure (timeout, 5xx, cold start, dropped connection) must
+  // NOT be reported as "piezo not found" -- only a real 404 means that.
+  // Also: skip a poll while the previous one is still running, and ignore
+  // any response that finishes after a newer request was already started,
+  // otherwise slow/overlapping requests pile up and old data overwrites new.
+  const inFlight = useRef(false);
+  const reqSeq = useRef(0);
+  const [connectionLost, setConnectionLost] = useState(false);
+  const isRealNotFound = (err: any) => err?.status === 404;
+
   const load = useCallback(() => {
-    if (!piezoId) return;
+    if (!piezoId || inFlight.current) return;
+    inFlight.current = true;
+    const seq = ++reqSeq.current;
     ownerApi
       .piezoEvents(piezoId, treeId)
       .then((res: any) => {
+        if (seq !== reqSeq.current) return;
         setData(res);
         setNotFound(false);
+        setConnectionLost(false);
       })
-      .catch(() => setNotFound(true));
+      .catch((err: any) => {
+        if (seq !== reqSeq.current) return;
+        if (isRealNotFound(err)) setNotFound(true);
+        else setConnectionLost(true); // keep showing the last good data
+      })
+      .finally(() => {
+        inFlight.current = false;
+      });
   }, [piezoId, treeId]);
 
   useEffect(() => {
     setLoading(true);
     setData(null);
     setNotFound(false);
+    setConnectionLost(false);
+    const seq = ++reqSeq.current;
+    inFlight.current = true;
     ownerApi
       .piezoEvents(piezoId ?? '', treeId)
-      .then((res: any) => setData(res))
-      .catch(() => setNotFound(true))
-      .finally(() => setLoading(false));
+      .then((res: any) => {
+        if (seq === reqSeq.current) setData(res);
+      })
+      .catch((err: any) => {
+        if (seq !== reqSeq.current) return;
+        if (isRealNotFound(err)) setNotFound(true);
+        else setConnectionLost(true);
+      })
+      .finally(() => {
+        if (seq === reqSeq.current) setLoading(false);
+        inFlight.current = false;
+      });
   }, [piezoId, treeId]);
 
   usePolling(load, 1000);
@@ -139,12 +172,21 @@ export const PiezoDetailPage: React.FC = () => {
         <div className="rounded-lg bg-[#141414] border border-[#262626] p-10 text-center text-xs text-[#808080]">
           Loading sensor data…
         </div>
-      ) : notFound || !data ? (
+      ) : notFound ? (
         <div className="rounded-lg bg-[#141414] border border-[#262626] p-10 text-center text-xs text-[#808080]">
           This piezo transducer couldn't be found on your estate.
         </div>
+      ) : !data ? (
+        <div className="rounded-lg bg-[#141414] border border-[#262626] p-10 text-center text-xs text-[#808080]">
+          Can't reach the server right now -- retrying…
+        </div>
       ) : (
         <>
+          {connectionLost && (
+            <div className="rounded-lg bg-[#1A1408] border border-[#4D3B0A] px-4 py-2 text-[11px] text-[#D4AF37]">
+              Connection hiccup -- showing the last readings, retrying…
+            </div>
+          )}
           {/* Current status */}
           <div className="rounded-lg bg-[#141414] border border-[#262626] p-5 sm:p-6">
             <div className="flex items-center justify-between mb-3">

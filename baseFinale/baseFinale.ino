@@ -2,9 +2,9 @@
 // Board: ESP32 + SX127x LoRa.  Libraries: sandeepmistry/LoRa, ArduinoJson v6
 //
 // Role: receives ONE LoRa packet per second from each Master Node (it
-// carries all 4 piezos), measures the real RSSI itself, splits the
-// packet into 4 readings (pin A0..A3 = Piezo 1..4) and POSTs each to
-// /api/ingest-vibration -- the endpoint is unchanged.
+// carries all 4 piezos), measures the real RSSI itself, forwards the
+// whole packet (4 piezos, pin A0..A3 = Piezo 1..4) as ONE batched POST to
+// /api/ingest-vibration. The server also still accepts the old single format.
 //
 // What's different from the old version:
 //   * Packet format: g/e/p/c arrays + "v" severity string (4 piezos).
@@ -41,14 +41,14 @@ static const char *DEVICE_API_KEY = SECRET_DEVICE_API_KEY; // must match DEVICE_
 #define LORA_NSS  5
 #define LORA_RST  14
 #define LORA_DIO0 4
-#define LORA_FREQ 915E6   // NOTE: the Master Node file uses 433E6 -- these two MUST match
+#define LORA_FREQ 433E6   // NOTE: the Master Node file uses 433E6 -- these two MUST match
 #define LORA_SF   7       // MUST match the Master Node
 
 static const char *PIN_NAMES[4] = {"A0", "A1", "A2", "A3"};
 
 // ---- Outgoing queue (filled by the LoRa loop, drained by postTask) ----
-struct OutBody { char json[300]; };
-static const int QUEUE_SIZE = 40;      // ~10 s of backlog for 4 piezos
+struct OutBody { char json[640]; };    // one request = all 4 piezos of one LoRa packet
+static const int QUEUE_SIZE = 20;      // ~20 s of backlog (1 request per packet per second)
 static QueueHandle_t postQueue;
 
 void enqueueBody(const String &body) {
@@ -126,22 +126,25 @@ void postTask(void *) {
   }
 }
 
-// Builds the JSON body server/routes/ingest.js expects, for ONE piezo.
-String makeBody(const char *nodeId, const char *sector, const char *pin, float grams,
-                int battery, int rssi, const char *severity, int events, bool pest, int clicks) {
-  StaticJsonDocument<384> out;
-  out["api_key"]  = DEVICE_API_KEY;
-  out["node_id"]  = nodeId;
-  out["pin"]      = pin;               // A0..A3 -> Piezo 1..4 (was missing before)
-  out["sector"]   = sector;
-  out["grams"]    = grams;
-  out["battery"]  = battery;
-  out["rssi"]     = rssi;              // measured here, not self-reported
-  out["severity"] = severity;
-  out["events"]   = events;
-  out["pest_likely"] = pest;
-  if (clicks > 0) out["pest_clicks"] = clicks;
-
+// Builds ONE JSON body for a whole packet (up to 4 piezos). The server
+// (server/routes/ingest.js) accepts {readings:[...]} and handles them in a
+// single request -- 4x fewer HTTPS calls than posting each piezo alone.
+String makeBatchBody(const char *nodeId, const char *sector, int battery, int rssi,
+                     const float *grams, const bool *pest, const int *clicks, size_t n) {
+  StaticJsonDocument<1024> out;
+  out["api_key"] = DEVICE_API_KEY;
+  out["node_id"] = nodeId;
+  out["sector"]  = sector;
+  out["battery"] = battery;
+  out["rssi"]    = rssi;               // measured here, not self-reported
+  JsonArray readings = out.createNestedArray("readings");
+  for (size_t i = 0; i < n; i++) {
+    JsonObject r = readings.createNestedObject();
+    r["pin"]   = PIN_NAMES[i];         // A0..A3 -> Piezo 1..4
+    r["grams"] = grams[i];
+    r["pest_likely"] = pest[i];
+    if (clicks[i] > 0) r["pest_clicks"] = clicks[i];
+  }
   String body;
   serializeJson(out, body);
   return body;
@@ -161,28 +164,47 @@ void handlePacket(const String &packet, int rssi) {
   const char *sector = in["s"] | "";
   int battery = in["b"] | 0;
 
+  float grams[4] = {0, 0, 0, 0};
+  bool  pest[4]  = {false, false, false, false};
+  int   clicks[4] = {0, 0, 0, 0};
+  size_t n = 0;
+
   JsonArray g = in["g"].as<JsonArray>();
   if (!g.isNull()) {
     // New format: all four piezos in one packet.
-    JsonArray e = in["e"].as<JsonArray>();
     JsonArray p = in["p"].as<JsonArray>();
     JsonArray c = in["c"].as<JsonArray>();
-    const char *v = in["v"] | "";
-    size_t vLen = strlen(v);
-
-    size_t n = g.size();
+    n = g.size();
     if (n > 4) n = 4;
     for (size_t i = 0; i < n; i++) {
-      char sv[2] = { (i < vLen) ? v[i] : 'N', '\0' };
-      enqueueBody(makeBody(nodeId, sector, PIN_NAMES[i], g[i] | 0.0f, battery, rssi,
-                           sv, e[i] | 0, (p[i] | 0) != 0, c[i] | 0));
+      grams[i]  = g[i] | 0.0f;
+      pest[i]   = (p[i] | 0) != 0;
+      clicks[i] = c[i] | 0;
     }
+    enqueueBody(makeBatchBody(nodeId, sector, battery, rssi, grams, pest, clicks, n));
   } else {
-    // Old single-piezo packet {n,pin,s,g,b,sv,e,p,c}.
+    // Old single-piezo packet {n,pin,s,g,b,sv,e,p,c}: keep its own pin.
+    // Sent as a one-reading batch, filed under the pin it came from.
     const char *pin = in["pin"] | "A0";
-    const char *sv = in["sv"] | "N";
-    enqueueBody(makeBody(nodeId, sector, pin, in["g"] | 0.0f, battery, rssi,
-                         sv, in["e"] | 0, (bool)(in["p"] | false), in["c"] | 0));
+    int idx = 0;
+    for (int i = 0; i < 4; i++) if (strcmp(pin, PIN_NAMES[i]) == 0) idx = i;
+    float gOne = in["g"] | 0.0f;
+    bool pOne = (bool)(in["p"] | false);
+    int cOne = in["c"] | 0;
+    StaticJsonDocument<512> out;
+    out["api_key"] = DEVICE_API_KEY;
+    out["node_id"] = nodeId;
+    out["sector"]  = sector;
+    out["battery"] = battery;
+    out["rssi"]    = rssi;
+    JsonObject r = out.createNestedArray("readings").createNestedObject();
+    r["pin"] = PIN_NAMES[idx];
+    r["grams"] = gOne;
+    r["pest_likely"] = pOne;
+    if (cOne > 0) r["pest_clicks"] = cOne;
+    String body;
+    serializeJson(out, body);
+    enqueueBody(body);
   }
 }
 
