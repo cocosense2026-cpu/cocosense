@@ -183,12 +183,20 @@ router.post('/ingest-vibration', async (req, res) => {
     console.warn('[ingest] rollup update failed:', err.message);
   }
 
-  // Cap raw readings at 10 per sensor PER TREE -- once a new reading
-  // pushes that count past 10, the oldest one is dropped so
-  // vibration_events stays a rolling window instead of growing forever.
-  // Scoped to the tree as well as the sensor so moving the device to a new
-  // tree never evicts the previous tree's recent log. Alerts and
+  // Cap raw readings at RAW_RETENTION_PER_SENSOR per sensor PER TREE --
+  // once a new reading pushes that count past the cap, the oldest one is
+  // dropped so vibration_events stays a rolling window instead of growing
+  // forever. Scoped to the tree as well as the sensor so moving the device
+  // to a new tree never evicts the previous tree's recent log. Alerts and
   // notifications are untouched and keep accumulating normally.
+  //
+  // Raised from 10 -> 600: with the Master Node now reporting once per
+  // second, a cap of 10 only ever held the last 10 SECONDS of raw history,
+  // which made a "zoom in and see every second" view on the dashboard
+  // impossible -- there was nothing left to zoom into. 600 rows holds a
+  // full 10 minutes of per-second readings per sensor, which is enough to
+  // scroll/zoom through while keeping the table small.
+  const RAW_RETENTION_PER_SENSOR = 600;
   await db.prepare(
     `DELETE FROM vibration_events
      WHERE piezo_sensor_id = ? AND node_tree_id IS ?
@@ -196,9 +204,9 @@ router.post('/ingest-vibration', async (req, res) => {
          SELECT id FROM vibration_events
          WHERE piezo_sensor_id = ? AND node_tree_id IS ?
          ORDER BY timestamp DESC, id DESC
-         LIMIT 10
+         LIMIT ?
        )`
-  ).run(piezoSensorIdValue, nodeTreeId, piezoSensorIdValue, nodeTreeId);
+  ).run(piezoSensorIdValue, nodeTreeId, piezoSensorIdValue, nodeTreeId, RAW_RETENTION_PER_SENSOR);
   }
 
   // Keep master_nodes' live health snapshot fresh if this node is already

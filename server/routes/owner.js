@@ -949,14 +949,16 @@ router.get('/owner/events', requireOwnerAuth, async (req, res) => {
   const recentStmt = db.prepare(
     `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.node_tree_id IS ? ORDER BY ${orderBy} LIMIT ?`
   );
-  // `sparkline` is just the newest raw readings (vibration_events only
-  // keeps 10 per sensor, so it can never cover a week) -- kept for older
-  // clients. The 7-day scrollable chart reads `week` instead: the
-  // strongest reading in each hour, from the long-term rollup, sent as a
-  // bare number array because this endpoint is polled every 10 seconds
-  // (168 numbers per card, not hundreds of row objects).
+  // `sparkline` is the newest raw readings (vibration_events now keeps up
+  // to 600 per sensor -- about 10 minutes at the Master Node's 1-reading-
+  // per-second rate -- so it can cover a zoomed-in "every second" view,
+  // though still nowhere near a full week). The 7-day scrollable chart
+  // reads `week` instead: the strongest reading in each hour, from the
+  // long-term rollup, sent as a bare number array because this endpoint is
+  // polled every 10 seconds (168 numbers per card, not hundreds of row
+  // objects). The frontend lets the owner toggle between the two.
   const sparklineStmt = db.prepare(
-    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.node_tree_id IS ? ORDER BY v.timestamp DESC LIMIT 8`
+    `SELECT v.* FROM vibration_events v WHERE v.piezo_sensor_id = ? AND v.node_tree_id IS ? ORDER BY v.timestamp DESC LIMIT 600`
   );
   const EVENTS_WEEK_BUCKET_MIN = 60;
 
@@ -1118,18 +1120,20 @@ router.get('/owner/events/piezo/:piezoId', requireOwnerAuth, async (req, res) =>
           .all(sensor.id, treeId, RECENT_LIMIT)
       )
     : [];
-  // The scrollable chart: the strongest reading in every 15-minute window
-  // of the last 7 days, from the long-term rollup. (It used to be the
-  // newest 500 raw rows, but vibration_events only keeps 10 per sensor and
-  // a chatty sensor fills 500 rows in minutes, so "a week" was never a
-  // week.) Sent as a bare number array -- 672 numbers, ~3 KB -- since this
-  // page polls every 10 seconds.
+  // The scrollable WEEK chart: the strongest reading in every 15-minute
+  // window of the last 7 days, from the long-term rollup. Sent as a bare
+  // number array -- 672 numbers, ~3 KB -- since this page polls every 10
+  // seconds.
   const week = enabled ? await weekPeaks(db, sensor.id, 15, treeId) : null;
-  // Kept for older clients: the newest raw readings.
+  // The zoomed-in LIVE/raw chart: the newest raw readings, one per actual
+  // device report. vibration_events now keeps up to 600 per sensor (about
+  // 10 minutes at a 1-reading-per-second rate), so this can show every
+  // single second rather than collapsing them into the week's 15-minute
+  // buckets. The frontend lets the owner toggle between this and `week`.
   const sparkline = enabled
     ? toCamel(
         await db
-          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND node_tree_id IS ? ORDER BY timestamp DESC LIMIT 20`)
+          .prepare(`SELECT * FROM vibration_events WHERE piezo_sensor_id = ? AND node_tree_id IS ? ORDER BY timestamp DESC LIMIT 600`)
           .all(sensor.id, treeId)
       ).reverse()
     : [];

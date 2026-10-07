@@ -105,6 +105,11 @@ export const EventsPage: React.FC = () => {
   const sort = searchParams.get('sort') === 'strongest' ? 'strongest' : 'recent';
   const [data, setData] = useState<EventsData | null>(null);
   const [loading, setLoading] = useState(true);
+  // "Live" = the newest raw, per-second readings (zoomed in, scrollable --
+  // every individual report is its own point). "Week" = the strongest
+  // reading per 15-minute window over the last 7 days (zoomed out). Live
+  // is the default since seeing every second is the point of this toggle.
+  const [chartMode, setChartMode] = useState<'live' | 'week'>('live');
 
   // ---- Trees -------------------------------------------------------
   // The owner's device is moved from tree to tree. Each tree keeps its own
@@ -461,21 +466,50 @@ export const EventsPage: React.FC = () => {
           vibration on its own and grayed out whenever that specific
           sensor is disabled or not connected. */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">
             Vibration Intensity ({enabledCount}/{panels.length} sensors active)
           </span>
+          {/* Live (every second, zoomed in / scrollable) vs Week (15-min
+              peaks over 7 days, zoomed out) -- applies to all cards below. */}
+          <div className="flex rounded-lg border border-[#333333] overflow-hidden text-[10px] font-bold uppercase tracking-wide">
+            <button
+              type="button"
+              onClick={() => setChartMode('live')}
+              className={`px-3 py-1.5 transition-colors ${
+                chartMode === 'live' ? 'bg-[#D4AF37] text-black' : 'bg-[#1A1A1A] text-[#808080] hover:text-[#E0E0E0]'
+              }`}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartMode('week')}
+              className={`px-3 py-1.5 transition-colors ${
+                chartMode === 'week' ? 'bg-[#D4AF37] text-black' : 'bg-[#1A1A1A] text-[#808080] hover:text-[#E0E0E0]'
+              }`}
+            >
+              Week
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {panels.map((panel, index) => {
-            // Full 7 days (hourly windows) when the server sent it, so the
-            // card's swipe really goes back a week; raw readings otherwise.
+            // Full 7 days (15-min windows) when the server sent it; the
+            // raw per-second readings otherwise. chartMode picks which one
+            // to prefer when both are available -- Live always wins unless
+            // there's simply no raw data yet, Week always wins unless
+            // there's no rollup yet, so a card never goes blank.
             const weekPoints = panel.week ? weekToPoints(panel.week, data?.thresholds) : [];
-            const panelBars = weekPoints.length
-              ? weekPoints
-              : panel.sparkline.length
-              ? panel.sparkline
+            const livePoints = panel.sparkline;
+            const preferred = chartMode === 'live' ? livePoints : weekPoints;
+            const fallback = chartMode === 'live' ? weekPoints : livePoints;
+            const panelBars = preferred.length
+              ? preferred
+              : fallback.length
+              ? fallback
               : Array(8).fill({ grams: 0, severity: 'Normal' });
+            const usingWeek = panelBars === weekPoints && weekPoints.length > 0;
             // Two separate "off" states: `enabled` is the HARDWARE (piezo
             // damaged / not wired); `piezoOn` is the owner's switch for THIS
             // tree (e.g. the tree is dead). A switched-off piezo keeps its
@@ -567,7 +601,12 @@ export const EventsPage: React.FC = () => {
                       points={panelBars}
                       height={150}
                       scrollable
-                      pxPerPoint={weekPoints.length ? 12 : undefined}
+                      // Week peaks are already spaced events, 12px reads
+                      // fine; raw per-second points get more room (20px)
+                      // so each individual second stays visually distinct
+                      // instead of blurring together -- that spacing is
+                      // what makes "every second visible" actually work.
+                      pxPerPoint={usingWeek ? 12 : 20}
                     />
                   </div>
                 )}

@@ -79,6 +79,11 @@ export const PiezoDetailPage: React.FC = () => {
   const [data, setData] = useState<PiezoDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // "Live" = newest raw, per-second readings, zoomed in and scrollable so
+  // each individual report is its own point. "Week" = strongest reading
+  // per 15-minute window over the last 7 days, zoomed out. Defaults to
+  // Live since seeing every second is the point of this toggle.
+  const [chartMode, setChartMode] = useState<'live' | 'week'>('live');
 
   const load = useCallback(() => {
     if (!piezoId) return;
@@ -161,8 +166,30 @@ export const PiezoDetailPage: React.FC = () => {
 
           {/* Vibration chart -- this piezo only */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <span className="text-xs font-bold uppercase tracking-wider text-[#808080]">Vibration Intensity</span>
+              {/* Live (every second, zoomed in / scrollable) vs Week
+                  (15-min peaks over 7 days, zoomed out). */}
+              <div className="flex rounded-lg border border-[#333333] overflow-hidden text-[10px] font-bold uppercase tracking-wide">
+                <button
+                  type="button"
+                  onClick={() => setChartMode('live')}
+                  className={`px-3 py-1.5 transition-colors ${
+                    chartMode === 'live' ? 'bg-[#D4AF37] text-black' : 'bg-[#1A1A1A] text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                >
+                  Live
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartMode('week')}
+                  className={`px-3 py-1.5 transition-colors ${
+                    chartMode === 'week' ? 'bg-[#D4AF37] text-black' : 'bg-[#1A1A1A] text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                >
+                  Week
+                </button>
+              </div>
             </div>
             <div
               className={`rounded-lg border p-5 sm:p-6 transition-opacity ${
@@ -171,14 +198,17 @@ export const PiezoDetailPage: React.FC = () => {
             >
               {(() => {
                 const placeholderPoints = Array.from({ length: 8 }, () => ({ grams: 0, severity: 'Offline' }));
-                // The full 7 days (every window, quiet ones as 0) when the
-                // server sent it; the handful of raw readings otherwise.
+                // Full 7 days (15-min windows) when the server sent it; the
+                // raw per-second readings otherwise. chartMode picks which
+                // one to prefer when both exist -- the other is still the
+                // fallback so the chart never goes blank just because the
+                // preferred series hasn't loaded yet.
                 const weekPoints = data.week ? weekToPoints(data.week, data.thresholds) : [];
-                const chartPoints = weekPoints.length
-                  ? weekPoints
-                  : data.sparkline.length
-                  ? data.sparkline
-                  : placeholderPoints;
+                const livePoints = data.sparkline;
+                const preferred = chartMode === 'live' ? livePoints : weekPoints;
+                const fallback = chartMode === 'live' ? weekPoints : livePoints;
+                const chartPoints = preferred.length ? preferred : fallback.length ? fallback : placeholderPoints;
+                const usingWeek = chartPoints === weekPoints && weekPoints.length > 0;
                 const noReadingsYet = !data.week && data.sparkline.length === 0;
                 const quietWeek = !!data.week && !weekHasVibration(data.week);
                 return (
@@ -189,7 +219,11 @@ export const PiezoDetailPage: React.FC = () => {
                         height={280}
                         xAxisLabel="Time"
                         scrollable
-                        pxPerPoint={weekPoints.length ? 8 : undefined}
+                        // Week peaks are already spaced-out events, 8px
+                        // reads fine; raw per-second points get more room
+                        // (20px) so every individual second stays visually
+                        // distinct instead of blurring together.
+                        pxPerPoint={usingWeek ? 8 : 20}
                       />
                     </div>
                     {!data.enabled ? (
