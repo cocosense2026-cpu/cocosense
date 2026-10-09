@@ -47,12 +47,16 @@ function signalLabelFor(rssi) {
 const PEST_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const IMPACT_ALERT_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
 
-async function recentlyAlerted(nodeId, alertType, cooldownMs) {
+// Cooldown is per node AND per piezo (and per tree): each piezo keeps its own
+// alert history, so one piezo's alert must not swallow another piezo's.
+async function recentlyAlerted(nodeId, alertType, cooldownMs, piezoId, nodeTreeId) {
   const row = await db
     .prepare(
-      `SELECT created_at FROM alerts WHERE node_id = ? AND alert_type = ? ORDER BY created_at DESC LIMIT 1`
+      `SELECT created_at FROM alerts
+        WHERE node_id = ? AND alert_type = ? AND piezo_sensor_id IS ? AND node_tree_id IS ?
+        ORDER BY created_at DESC LIMIT 1`
     )
-    .get(nodeId, alertType);
+    .get(nodeId, alertType, piezoId ?? null, nodeTreeId ?? null);
   if (!row) return false;
   const ageMs = Date.now() - new Date(row.created_at.replace(' ', 'T') + 'Z').getTime();
   return ageMs < cooldownMs;
@@ -225,17 +229,19 @@ router.post('/ingest-vibration', async (req, res) => {
     if (r.piezoOff) continue;
     const { grams, severity, pestLikely, piezoSensorIdValue, pest_clicks, pest_band_ratio } = r;
 
-    if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS))) {
+    if (severity !== 'Normal' && !(await recentlyAlerted(node_id, 'impact', IMPACT_ALERT_COOLDOWN_MS, piezoSensorIdValue, nodeTreeId))) {
       const impactInsert = await db.prepare(
-        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
-         VALUES ('impact', ?, ?, ?, ?, ?, ?, 0)`
+        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed, node_tree_id, piezo_sensor_id)
+         VALUES ('impact', ?, ?, ?, ?, ?, ?, 0, ?, ?)`
       ).run(
         `${severity} Impact Detected`,
         sector ?? null,
         node_id,
         severity.toUpperCase(),
         `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} recorded a ${severity.toLowerCase()} impact (${grams.toFixed(2)}g).`,
-        grams
+        grams,
+        nodeTreeId,
+        piezoSensorIdValue
       );
       await restampRowHash(db, 'alerts', 'id', impactInsert.lastInsertRowid);
       await capAlerts();
@@ -250,16 +256,16 @@ router.post('/ingest-vibration', async (req, res) => {
       buzzer = buzzer || impactResult.buzzer;
     }
 
-    if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS))) {
+    if (pestLikely && !(await recentlyAlerted(node_id, 'pest', PEST_ALERT_COOLDOWN_MS, piezoSensorIdValue, nodeTreeId))) {
       const pestDescription =
         `Piezo sensor ${piezoSensorIdValue} on ${node_id}${treeSuffix}${sector ? ' in ' + sector : ''} matched a sustained feeding-pattern signature` +
         (pest_clicks != null ? ` (${pest_clicks} matching windows` : '') +
         (pest_band_ratio != null ? `, band ratio ${Number(pest_band_ratio).toFixed(2)})` : pest_clicks != null ? ')' : '');
 
       const pestInsert = await db.prepare(
-        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed)
-         VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0)`
-      ).run('Pest Feeding Pattern Detected', sector ?? null, node_id, pestDescription, grams);
+        `INSERT INTO alerts (alert_type, title, sector, node_id, severity, description, grams, reviewed, node_tree_id, piezo_sensor_id)
+         VALUES ('pest', ?, ?, ?, 'CRITICAL', ?, ?, 0, ?, ?)`
+      ).run('Pest Feeding Pattern Detected', sector ?? null, node_id, pestDescription, grams, nodeTreeId, piezoSensorIdValue);
       await restampRowHash(db, 'alerts', 'id', pestInsert.lastInsertRowid);
       await capAlerts();
 

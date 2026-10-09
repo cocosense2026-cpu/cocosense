@@ -214,7 +214,19 @@ export const ownerApi = {
   activateTree: (id: number) => request<{ ok: true; tree: any }>(`/owner/trees/${id}/activate`, { method: 'POST' }),
 
   // Alert History: this owner's pest / impact alerts, newest first.
-  alerts: () => request<{ ok: true; alerts: any[] }>('/owner/alerts'),
+  // Optionally narrowed to ONE tree's ONE piezo (each piezo has its own history).
+  alerts: (treeId?: number | null, piezoId?: string | null) => {
+    const qs = new URLSearchParams();
+    if (treeId != null) qs.set('treeId', String(treeId));
+    if (piezoId) qs.set('piezoId', piezoId);
+    const q = qs.toString();
+    return request<{ ok: true; alerts: any[] }>(`/owner/alerts${q ? `?${q}` : ''}`);
+  },
+  // Unreviewed / total alert counts per tree + piezo, for the picker badges.
+  alertSummary: () =>
+    request<{ ok: true; counts: { treeId: number; piezoId: string; total: number; unreviewed: number }[] }>(
+      '/owner/alerts/summary'
+    ),
   reviewAlert: (id: number) => request<{ ok: true }>(`/owner/alerts/${id}/review`, { method: 'PATCH' }),
 
   piezoEvents: (piezoId: string, treeId?: number | null) =>

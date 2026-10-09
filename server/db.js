@@ -264,6 +264,12 @@ const migrations = [
   // is part of that table's PRIMARY KEY it is added by rebuilding the table
   // (see migrateRollupPerTree below), not by an ALTER.
   `ALTER TABLE vibration_events ADD COLUMN node_tree_id INTEGER`,
+  // Alert History is kept per tree AND per piezo: each alert now records
+  // which tree (node_trees row) the device was on and which piezo sensor
+  // raised it. Older alerts are backfilled from their description text
+  // (see backfillAlertOrigins below).
+  `ALTER TABLE alerts ADD COLUMN node_tree_id INTEGER`,
+  `ALTER TABLE alerts ADD COLUMN piezo_sensor_id TEXT`,
 ];
 
 // No top-level `await` here on purpose: esbuild can't compile top-level
@@ -314,6 +320,37 @@ async function migrateRollupPerTree() {
   console.log('[db] vibration_rollup rebuilt with node_tree_id');
 }
 
+// One-time, right after the alerts table gains node_tree_id / piezo_sensor_id:
+// work out which tree + piezo each EXISTING alert came from. Ingest has always
+// written both into the description ("Piezo sensor MN-1-A0 on MN-1 (Tree 2) in
+// ..."), so they can be recovered from there. Every alert is then re-stamped,
+// because adding columns changes what its row_hash is computed over.
+async function backfillAlertOrigins() {
+  try {
+    const trees = (await client.execute(`SELECT id, node_id, name FROM node_trees`)).rows;
+    const treeByNodeAndName = new Map(trees.map((t) => [`${t.node_id}\u0000${t.name}`, Number(t.id)]));
+    const alerts = (await client.execute(`SELECT id, node_id, description FROM alerts`)).rows;
+    const { rowHash } = await import('./hash.js');
+    for (const a of alerts) {
+      const desc = String(a.description ?? '');
+      const piezo = desc.match(/Piezo sensor (\S+) on /i)?.[1] ?? null;
+      const treeName = desc.match(/ on \S+ \((.+?)\)(?: in |[ .]|$)/)?.[1] ?? null;
+      const treeId = treeName ? treeByNodeAndName.get(`${a.node_id}\u0000${treeName}`) ?? null : null;
+      await client.execute({
+        sql: `UPDATE alerts SET piezo_sensor_id = ?, node_tree_id = ? WHERE id = ?`,
+        args: [piezo, treeId, a.id],
+      });
+      const full = (await client.execute({ sql: `SELECT * FROM alerts WHERE id = ?`, args: [a.id] })).rows[0];
+      if (!full) continue;
+      const fields = {};
+      for (const key of Object.keys(full)) if (key !== 'row_hash' && !/^\d+$/.test(key)) fields[key] = full[key];
+      await client.execute({ sql: `UPDATE alerts SET row_hash = ? WHERE id = ?`, args: [rowHash(fields), a.id] });
+    }
+  } catch (err) {
+    console.warn('[db] alert origin backfill skipped:', err.message);
+  }
+}
+
 async function initDb() {
   await db.exec(tablesSql);
 
@@ -340,12 +377,15 @@ async function initDb() {
       existingColumns[table] = new Set(info.rows.map((r) => String(r.name).toLowerCase()));
     })
   );
+  const alertsNeedBackfill = !existingColumns.alerts?.has('piezo_sensor_id');
   for (const w of wanted) {
     if (w.table && existingColumns[w.table]?.has(w.column)) continue; // already migrated
     try { await db.exec(w.sql); } catch { /* column already exists -- fine */ }
   }
 
   await migrateRollupPerTree();
+
+  if (alertsNeedBackfill) await backfillAlertOrigins();
 
   if (indexesSql) await db.exec(indexesSql);
 

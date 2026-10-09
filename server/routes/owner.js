@@ -1295,16 +1295,60 @@ router.delete('/owner/notifications/:id', requireOwnerAuth, async (req, res) => 
 // raised on THIS owner's nodes / trees. Marking one reviewed uses the same
 // ownership check as the notification feed above, so an owner can never
 // touch another owner's alerts by guessing ids.
-const OWNER_ALERTS_SQL = `SELECT a.* FROM alerts a
+const OWNER_ALERTS_BASE_SQL = `SELECT a.* FROM alerts a
      LEFT JOIN master_nodes n ON a.node_id = n.id
      LEFT JOIN monitored_trees t ON a.tree_id = t.id
-    WHERE n.owner_id = ? OR t.owner_id = ?
-    ORDER BY a.created_at DESC LIMIT 200`;
+    WHERE (n.owner_id = ? OR t.owner_id = ?)`;
 
+// ?treeId= (a node_trees id) and ?piezoId= (e.g. MN-1-A0) narrow the list to
+// ONE tree's ONE piezo -- each piezo keeps its own alert history and never
+// mixes with another's. Both are optional so older callers still get everything.
 router.get('/owner/alerts', requireOwnerAuth, async (req, res) => {
   const ownerId = req.ownerRow.id;
-  const rows = toCamel(await db.prepare(OWNER_ALERTS_SQL).all(ownerId, ownerId));
+  let sql = OWNER_ALERTS_BASE_SQL;
+  const params = [ownerId, ownerId];
+  if (req.query.treeId != null && req.query.treeId !== '') {
+    const treeId = Number(req.query.treeId);
+    if (!Number.isInteger(treeId)) return res.status(400).json({ ok: false, error: 'Invalid tree.' });
+    sql += ' AND a.node_tree_id = ?';
+    params.push(treeId);
+  }
+  if (req.query.piezoId != null && req.query.piezoId !== '') {
+    sql += ' AND a.piezo_sensor_id = ?';
+    params.push(String(req.query.piezoId));
+  }
+  sql += ' ORDER BY a.created_at DESC, a.id DESC LIMIT 200';
+  const rows = toCamel(await db.prepare(sql).all(...params));
   res.json({ ok: true, alerts: rows.map((a) => ({ ...a, reviewed: !!a.reviewed })) });
+});
+
+// How many alerts still need review for each tree + piezo, so the pickers on
+// the Alert History page can show a badge before anything is opened.
+router.get('/owner/alerts/summary', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  const rows = toCamel(
+    await db
+      .prepare(
+        `SELECT a.node_tree_id, a.piezo_sensor_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN a.reviewed = 0 THEN 1 ELSE 0 END) AS unreviewed
+           FROM alerts a
+           LEFT JOIN master_nodes n ON a.node_id = n.id
+           LEFT JOIN monitored_trees t ON a.tree_id = t.id
+          WHERE (n.owner_id = ? OR t.owner_id = ?) AND a.node_tree_id IS NOT NULL AND a.piezo_sensor_id IS NOT NULL
+          GROUP BY a.node_tree_id, a.piezo_sensor_id`
+      )
+      .all(ownerId, ownerId)
+  );
+  res.json({
+    ok: true,
+    counts: rows.map((r) => ({
+      treeId: Number(r.nodeTreeId),
+      piezoId: r.piezoSensorId,
+      total: Number(r.total),
+      unreviewed: Number(r.unreviewed ?? 0),
+    })),
+  });
 });
 
 router.patch('/owner/alerts/:id/review', requireOwnerAuth, async (req, res) => {

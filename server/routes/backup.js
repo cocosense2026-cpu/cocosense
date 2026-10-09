@@ -72,7 +72,7 @@ const TABLE_COLUMNS = {
   alerts: [
     'id', 'alert_type', 'title', 'sector', 'tree_id', 'node_id', 'pest', 'pest_type',
     'severity', 'description', 'grams', 'frequency_hz', 'threat_score', 'created_at',
-    'reviewed', 'reviewed_at', 'reviewed_by', 'row_hash',
+    'reviewed', 'reviewed_at', 'reviewed_by', 'node_tree_id', 'piezo_sensor_id', 'row_hash',
   ],
   notifications: [
     'id', 'icon', 'title', 'message', 'category', 'audience', 'owner_id', 'created_at',
