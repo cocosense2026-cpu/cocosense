@@ -27,7 +27,7 @@ import { usePolling } from './hooks/usePolling';
 // Database". Falls back to the old fully-local simulated behavior below
 // if the backend isn't running, so nothing breaks if you haven't started
 // `npm run server` yet.
-const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000') + '/api';
+const API_BASE = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '')) + '/api';
 
 export function App() {
   const [currentView, setCurrentView] = useState<ActiveView>('dashboard');
