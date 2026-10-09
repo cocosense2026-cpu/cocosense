@@ -160,7 +160,7 @@ export const PiezoDetailPage: React.FC = () => {
         }
         actions={
           <Link
-            to="/owner/events"
+            to={data?.nodeId ? `/owner/events?node=${encodeURIComponent(data.nodeId)}` : '/owner/events'}
             className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[#1A1A1A] hover:bg-[#222222] border border-[#333333] text-[#E0E0E0] text-xs font-semibold transition-colors"
           >
             <ArrowLeft className="w-4 h-4" /> All Piezos

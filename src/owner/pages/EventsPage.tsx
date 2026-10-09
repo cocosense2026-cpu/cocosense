@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil, Trash2, Power, Bug, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil, Trash2, Power, Bug, ShieldCheck, Radio, Wifi, ChevronRight, ArrowLeftRight } from 'lucide-react';
 import { TreeNameModal } from '../components/TreeNameModal';
 import { TreeDeleteModal } from '../components/TreeDeleteModal';
 import { ownerApi } from '../api';
@@ -62,6 +62,22 @@ interface TreeInfo {
   isActive: boolean;
 }
 
+// Full master-node card data (same shape the Master Node Mesh page uses),
+// shown on the "which master node?" step when the owner has 2+ devices.
+interface PickerNode {
+  id: string;
+  name: string;
+  online: boolean;
+  signalRssi: string | null;
+  totalSensors: number;
+  workingSensors: number;
+  sensors: Array<{ id: string; status: string }>;
+}
+
+function pinOf(sensorId: string): string {
+  return sensorId.split('-').pop() ?? '';
+}
+
 interface EventsData {
   sort: 'recent' | 'strongest';
   tree?: TreeInfo | null;
@@ -103,6 +119,10 @@ function relativeTime(iso: string): string {
 export const EventsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const sort = searchParams.get('sort') === 'strongest' ? 'strongest' : 'recent';
+  // `?node=` is the master node the owner picked on the first step. With 2+
+  // master nodes the page shows a picker (Master Node 1, Master Node 2...)
+  // until one is chosen; with a single node it goes straight to that node.
+  const nodeParam = searchParams.get('node');
   const [data, setData] = useState<EventsData | null>(null);
   const [loading, setLoading] = useState(true);
   // "Live" = the newest raw, per-second readings (zoomed in, scrollable --
@@ -130,6 +150,10 @@ export const EventsPage: React.FC = () => {
   treeIdRef.current = treeId;
   const selectedChipRef = useRef<HTMLButtonElement | null>(null);
 
+  // Detailed node cards for the picker step.
+  const [pickerNodes, setPickerNodes] = useState<PickerNode[]>([]);
+  const [pickerLoaded, setPickerLoaded] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     ownerApi
@@ -138,9 +162,6 @@ export const EventsPage: React.FC = () => {
         if (cancelled) return;
         setNodes(res.nodes);
         setTrees(res.trees);
-        const first = res.nodes[0]?.id ?? null;
-        setNodeId(first);
-        setTreeId(res.trees.find((t: TreeInfo) => t.nodeId === first && t.isActive)?.id ?? null);
       })
       .catch(() => void 0)
       .finally(() => !cancelled && setTreesReady(true));
@@ -153,6 +174,47 @@ export const EventsPage: React.FC = () => {
   useEffect(() => {
     selectedChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
   }, [treeId, trees.length]);
+
+  const multiNode = nodes.length > 1;
+  const validNodeParam = nodeParam && nodes.some((n) => n.id === nodeParam) ? nodeParam : null;
+  // Show the "which master node?" step until the owner has picked one.
+  const pickerOpen = treesReady && multiNode && !validNodeParam;
+  const pickerOpenRef = useRef(false);
+  pickerOpenRef.current = pickerOpen;
+
+  // Follow the picked node (or the only node) -- select its active tree.
+  useEffect(() => {
+    if (!treesReady) return;
+    const target = validNodeParam ?? (nodes.length === 1 ? nodes[0].id : null);
+    if (target === nodeId) return;
+    setNodeId(target);
+    if (target) {
+      const own = trees.filter((t) => t.nodeId === target);
+      setData(null);
+      setLoading(true);
+      setTreeId((own.find((t) => t.isActive) ?? own[0])?.id ?? null);
+    } else {
+      setTreeId(null);
+    }
+  }, [treesReady, validNodeParam, nodes, trees, nodeId]);
+
+  const loadPickerNodes = useCallback(() => {
+    if (!pickerOpenRef.current && pickerLoaded) return;
+    ownerApi
+      .nodes()
+      .then((res: any) => {
+        setPickerNodes(res || []);
+        setPickerLoaded(true);
+      })
+      .catch(() => setPickerLoaded(true));
+  }, [pickerLoaded]);
+  useEffect(() => {
+    if (pickerOpen) loadPickerNodes();
+  }, [pickerOpen, loadPickerNodes]);
+  usePolling(loadPickerNodes, 3000);
+
+  const chooseNode = (id: string) => setSearchParams({ sort, node: id });
+  const changeNode = () => setSearchParams({ sort });
 
   const nodeTrees = trees.filter((t) => t.nodeId === nodeId);
   const currentTree = trees.find((t) => t.id === treeId) ?? null;
@@ -255,7 +317,7 @@ export const EventsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!treesReady) return;
+    if (!treesReady || pickerOpen || (multiNode && !nodeId)) return;
     let cancelled = false;
     setLoading(true);
     ownerApi
@@ -266,14 +328,14 @@ export const EventsPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [sort, treeId, treesReady]);
+  }, [sort, treeId, treesReady, pickerOpen]);
 
   // Keeps this page current with new device readings as they arrive,
   // without the visible loading spinner flashing on every refresh --
   // only the initial load (above) shows that. A response for a tree the
   // owner has since switched away from is dropped, never shown.
   const refresh = useCallback(() => {
-    if (!treesReady || stateInFlight.current > 0) return;
+    if (!treesReady || pickerOpenRef.current || stateInFlight.current > 0) return;
     const asked = treeId;
     const version = stateVersion.current;
     ownerApi
@@ -310,6 +372,96 @@ export const EventsPage: React.FC = () => {
       }));
   const enabledCount = panels.filter((p) => p.enabled).length;
 
+  // ---- Step 1 (only with 2+ master nodes): which master node? ---------
+  if (pickerOpen) {
+    const list: PickerNode[] = pickerNodes.length
+      ? pickerNodes
+      : nodes.map((n) => ({ id: n.id, name: n.name, online: false, signalRssi: null, totalSensors: 4, workingSensors: 0, sensors: [] }));
+    return (
+      <div className="space-y-6 sm:space-y-8">
+        <PageHero
+          eyebrow="Farm Owner Portal"
+          subtitle="Vibration Events"
+          title="Choose a Master Node"
+          description="You have more than one master node. Pick the one whose vibration events you want to open."
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {list.map((node, i) => (
+            <button
+              key={node.id}
+              type="button"
+              onClick={() => chooseNode(node.id)}
+              className={`text-left rounded border p-6 shadow-xl flex flex-col justify-between space-y-5 transition-all ${
+                node.online
+                  ? 'bg-[#141414] border-[#262626] hover:border-[#D4AF37]/60'
+                  : 'bg-[#1C1212] border-[#F44336]/40 hover:border-[#F44336]'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[10px] uppercase font-bold tracking-widest text-[#D4AF37]">Master Node {i + 1}</span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
+                      node.online
+                        ? 'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
+                        : 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
+                    }`}
+                  >
+                    {node.online ? 'ONLINE' : 'OFFLINE'}
+                  </span>
+                </div>
+                <h3 className="font-mono text-xl sm:text-2xl font-bold text-white">{node.id}</h3>
+                <p className="text-xs text-[#808080] mt-0.5">{node.name}</p>
+
+                <div className="mt-4 flex items-center justify-between text-xs">
+                  <span className="text-[#808080] flex items-center gap-1.5">
+                    <Wifi className="w-4 h-4 text-[#D4AF37]" /> Signal RSSI
+                  </span>
+                  <span className="font-mono text-[#E0E0E0] font-semibold">{node.signalRssi ?? 'No data yet'}</span>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-[#262626]">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-[#808080] mb-2">
+                    <span>Piezo Transducers</span>
+                    <span className="font-mono text-[#D4AF37]">
+                      {node.workingSensors} / {node.totalSensors} Active
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(node.sensors.length ? node.sensors : PIN_LABELS.map((pin) => ({ id: `${node.id}-${pin}`, status: 'OPTIMAL' }))).map((sensor) => {
+                      const damaged = sensor.status === 'DAMAGED';
+                      const notConnected = sensor.status === 'NOT_CONNECTED';
+                      return (
+                        <div
+                          key={sensor.id}
+                          className={`h-7 rounded border flex items-center justify-center font-mono text-[9px] font-bold ${
+                            damaged
+                              ? 'bg-[#2B1B1B] border-[#F44336]/40 text-[#F44336]'
+                              : notConnected
+                              ? 'bg-[#151515] border-[#333333] text-[#666666]'
+                              : 'bg-[#0A0A0A] border-[#262626] text-[#D4AF37]'
+                          }`}
+                        >
+                          {pinOf(sensor.id)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-[#262626] flex items-center justify-center gap-1.5 py-2 px-3 rounded bg-[#D4AF37] text-black font-bold text-xs">
+                <span>Open Vibration Events</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </div>
+            </button>
+          ))}
+        </div>
+        <PageFooterNote icon={Radio} text="Each master node has its own trees and its own four piezo transducers. You can switch master nodes at any time from the Vibration Events page." />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 sm:space-y-8">
       <PageHero
@@ -323,23 +475,19 @@ export const EventsPage: React.FC = () => {
           been placed on. Choosing one puts the device on that tree. */}
       {nodes.length > 0 && (
         <div className="space-y-3">
-          {nodes.length > 1 && (
+          {multiNode && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] uppercase font-bold tracking-widest text-[#808080]">Master node</span>
-              {nodes.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  onClick={() => selectNode(n.id)}
-                  className={`px-2.5 py-1 rounded text-[11px] font-semibold border transition-colors ${
-                    n.id === nodeId
-                      ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
-                      : 'bg-[#141414] text-[#A0A0A0] border-[#262626] hover:text-white'
-                  }`}
-                >
-                  {n.name}
-                </button>
-              ))}
+              <span className="px-2.5 py-1 rounded text-[11px] font-semibold border bg-[#D4AF37] text-black border-[#D4AF37]">
+                Master Node {Math.max(1, nodes.findIndex((n) => n.id === nodeId) + 1)} · {nodes.find((n) => n.id === nodeId)?.name ?? nodeId}
+              </span>
+              <button
+                type="button"
+                onClick={changeNode}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold border bg-[#141414] text-[#A0A0A0] border-[#262626] hover:text-white transition-colors"
+              >
+                <ArrowLeftRight className="w-3 h-3" /> Change
+              </button>
             </div>
           )}
 
@@ -687,7 +835,7 @@ export const EventsPage: React.FC = () => {
           <div className="flex items-center gap-1 bg-[#141414] border border-[#262626] rounded p-0.5">
             <button
               type="button"
-              onClick={() => setSearchParams({ sort: 'recent' })}
+              onClick={() => setSearchParams(nodeId ? { sort: 'recent', node: nodeId } : { sort: 'recent' })}
               className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
                 sort === 'recent' ? 'bg-[#D4AF37] text-black' : 'text-[#808080] hover:text-white'
               }`}
@@ -696,7 +844,7 @@ export const EventsPage: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setSearchParams({ sort: 'strongest' })}
+              onClick={() => setSearchParams(nodeId ? { sort: 'strongest', node: nodeId } : { sort: 'strongest' })}
               className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
                 sort === 'strongest' ? 'bg-[#D4AF37] text-black' : 'text-[#808080] hover:text-white'
               }`}
