@@ -1191,10 +1191,11 @@ async function ownerNotificationFeed(ownerId) {
         `SELECT a.* FROM alerts a
          LEFT JOIN master_nodes n ON a.node_id = n.id
          LEFT JOIN monitored_trees t ON a.tree_id = t.id
-         WHERE n.owner_id = ? OR t.owner_id = ?
+         WHERE (n.owner_id = ? OR t.owner_id = ?)
+           AND a.id NOT IN (SELECT item_id FROM owner_hidden_items WHERE owner_id = ? AND item_type = 'notification')
          ORDER BY a.created_at DESC`
       )
-      .all(ownerId, ownerId)
+      .all(ownerId, ownerId, ownerId)
   ).map((a) => ({
     id: `a-${a.id}`,
     icon: a.alertType === 'pest' ? 'bug' : 'alert-triangle',
@@ -1281,13 +1282,25 @@ router.post('/owner/notifications/read-all', requireOwnerAuth, async (req, res) 
 router.delete('/owner/notifications/:id', requireOwnerAuth, async (req, res) => {
   const [prefix, rawId] = String(req.params.id).split('-');
   const id = Number(rawId);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'Invalid notification.' });
   if (prefix === 'n') {
     await db.prepare(`DELETE FROM notifications WHERE id = ? AND owner_id = ?`).run(id, req.ownerRow.id);
+  } else if (prefix === 'a') {
+    // Alert-sourced rows ("a-...") are the shared alert history the admin
+    // console and this owner's Alert History page also rely on, so the
+    // alert itself is NOT deleted -- it is only hidden from THIS owner's
+    // notification feed. Ownership is checked like everywhere else here.
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO owner_hidden_items (owner_id, item_type, item_id)
+         SELECT ?, 'notification', a.id FROM alerts a
+           LEFT JOIN master_nodes n ON a.node_id = n.id
+           LEFT JOIN monitored_trees t ON a.tree_id = t.id
+          WHERE a.id = ? AND (n.owner_id = ? OR t.owner_id = ?)`
+      )
+      .run(req.ownerRow.id, id, req.ownerRow.id, req.ownerRow.id);
   }
-  if (prefix === 'n') logAccessSafe(req.ownerRow.id, 'action', 'Deleted a notification');
-  // Alert-sourced rows ("a-…") aren't deletable here -- they're the
-  // shared alert history the admin console also relies on; owners can
-  // only mark them reviewed, same as the original build.
+  logAccessSafe(req.ownerRow.id, 'action', 'Deleted a notification');
   res.json({ ok: true });
 });
 
@@ -1307,7 +1320,8 @@ const OWNER_ALERTS_BASE_SQL = `SELECT a.* FROM alerts a
 router.get('/owner/alerts', requireOwnerAuth, async (req, res) => {
   const ownerId = req.ownerRow.id;
   let sql = OWNER_ALERTS_BASE_SQL;
-  const params = [ownerId, ownerId];
+  sql += ` AND a.id NOT IN (SELECT item_id FROM owner_hidden_items WHERE owner_id = ? AND item_type = 'alert_history')`;
+  const params = [ownerId, ownerId, ownerId];
   if (req.query.treeId != null && req.query.treeId !== '') {
     const treeId = Number(req.query.treeId);
     if (!Number.isInteger(treeId)) return res.status(400).json({ ok: false, error: 'Invalid tree.' });
@@ -1350,6 +1364,38 @@ router.get('/owner/alerts/summary', requireOwnerAuth, async (req, res) => {
       unreviewed: Number(r.unreviewed ?? 0),
     })),
   });
+});
+
+// "Clear Reviewed": hides this owner's already-reviewed alerts from their
+// Alert History for good (it survives leaving the page / signing out). The
+// alerts themselves stay in the database and in the admin console. Optional
+// treeId / piezoId narrow it to the list currently on screen.
+router.post('/owner/alerts/clear-reviewed', requireOwnerAuth, async (req, res) => {
+  const ownerId = req.ownerRow.id;
+  let extra = '';
+  const params = [ownerId, ownerId, ownerId];
+  const { treeId, piezoId } = req.body || {};
+  if (treeId != null && treeId !== '') {
+    const t = Number(treeId);
+    if (!Number.isInteger(t)) return res.status(400).json({ ok: false, error: 'Invalid tree.' });
+    extra += ' AND a.node_tree_id = ?';
+    params.push(t);
+  }
+  if (piezoId) {
+    extra += ' AND a.piezo_sensor_id = ?';
+    params.push(String(piezoId));
+  }
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO owner_hidden_items (owner_id, item_type, item_id)
+       SELECT ?, 'alert_history', a.id FROM alerts a
+         LEFT JOIN master_nodes n ON a.node_id = n.id
+         LEFT JOIN monitored_trees t ON a.tree_id = t.id
+        WHERE (n.owner_id = ? OR t.owner_id = ?) AND a.reviewed = 1${extra}`
+    )
+    .run(...params);
+  logAccessSafe(ownerId, 'action', 'Cleared reviewed alerts');
+  res.json({ ok: true });
 });
 
 router.patch('/owner/alerts/:id/review', requireOwnerAuth, async (req, res) => {

@@ -228,6 +228,12 @@ export const ownerApi = {
       '/owner/alerts/summary'
     ),
   reviewAlert: (id: number) => request<{ ok: true }>(`/owner/alerts/${id}/review`, { method: 'PATCH' }),
+  // Hides this owner's reviewed alerts from Alert History permanently.
+  clearReviewedAlerts: (treeId?: number | null, piezoId?: string | null) =>
+    request<{ ok: true }>('/owner/alerts/clear-reviewed', {
+      method: 'POST',
+      body: JSON.stringify({ treeId: treeId ?? null, piezoId: piezoId ?? null }),
+    }),
 
   piezoEvents: (piezoId: string, treeId?: number | null) =>
     request<any>(`/owner/events/piezo/${encodeURIComponent(piezoId)}${treeId != null ? `?treeId=${treeId}` : ''}`),

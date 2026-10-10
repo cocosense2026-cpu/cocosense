@@ -198,16 +198,15 @@ export const NotificationsPage: React.FC = () => {
                       Mark read
                     </button>
                   )}
-                  {item.id.startsWith('n-') && (
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(item.id)}
-                      className="p-1.5 rounded hover:bg-[#2B1B1B] text-[#808080] hover:text-[#F44336]"
-                      aria-label="Delete notification"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(item.id)}
+                    className="p-1.5 rounded hover:bg-[#2B1B1B] text-[#808080] hover:text-[#F44336]"
+                    aria-label="Delete notification"
+                    title="Delete notification"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             );

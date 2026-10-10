@@ -172,10 +172,16 @@ export const AlertHistoryPage: React.FC = () => {
   };
 
   const clearReviewed = () => {
+    // Hide right away, then save it on the server so the cleared alerts stay
+    // gone after leaving this page (they used to reappear on the next visit).
     setHiddenIds((prev) => {
       const next = new Set(prev);
       alerts.forEach((a) => a.reviewed && next.add(a.id));
       return next;
+    });
+    ownerApi.clearReviewedAlerts(treeId, piezoId).catch((err: unknown) => {
+      setActionError(err instanceof Error ? err.message : "Couldn't clear the reviewed alerts. Please try again.");
+      load();
     });
   };
 

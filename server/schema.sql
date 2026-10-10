@@ -395,6 +395,20 @@ CREATE TABLE IF NOT EXISTS vibration_rollup (
   PRIMARY KEY (piezo_sensor_id, node_tree_id, bucket_ts)
 ) WITHOUT ROWID;
 
+-- Per-owner "I cleared / deleted this" markers. Kept in their own table (not
+-- columns on alerts/notifications) so hiding something from ONE owner's
+-- Alert History or Notifications never touches the shared alert row the
+-- admin console also uses, and never changes that row's integrity hash.
+--   item_type 'alert_history' = hidden by "Clear Reviewed" on Alert History
+--   item_type 'notification'  = deleted from the Notifications page
+CREATE TABLE IF NOT EXISTS owner_hidden_items (
+  owner_id            TEXT NOT NULL,
+  item_type           TEXT NOT NULL,
+  item_id             INTEGER NOT NULL,
+  created_at          TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (owner_id, item_type, item_id)
+);
+
 -- ==INDEXES==
 -- (do not remove the marker above -- server/db.js splits the file here
 -- so table migrations can run before indexes reference new columns)
