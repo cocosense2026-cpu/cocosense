@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil, Trash2, Power, Bug, ShieldCheck, Radio, Wifi, ChevronRight, ArrowLeftRight } from 'lucide-react';
+import { AlertTriangle, AlertCircle, CheckCircle, PowerOff, Gauge, Activity, Plus, TreePalm, Loader2, Pencil, Trash2, Power, Bug, ShieldCheck, Radio, Wifi, ChevronRight, ArrowLeftRight, QrCode } from 'lucide-react';
 import { TreeNameModal } from '../components/TreeNameModal';
 import { TreeDeleteModal } from '../components/TreeDeleteModal';
+import { AddMasterNodeModal } from '../components/AddMasterNodeModal';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
 import { PageFooterNote } from '../../components/PageFooterNote';
@@ -121,7 +122,7 @@ export const EventsPage: React.FC = () => {
   const sort = searchParams.get('sort') === 'strongest' ? 'strongest' : 'recent';
   // `?node=` is the master node the owner picked on the first step. With 2+
   // master nodes the page shows a picker (Master Node 1, Master Node 2...)
-  // until one is chosen; with a single node it goes straight to that node.
+  // until one is chosen (even with a single node).
   const nodeParam = searchParams.get('node');
   const [data, setData] = useState<EventsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,6 +154,9 @@ export const EventsPage: React.FC = () => {
   // Detailed node cards for the picker step.
   const [pickerNodes, setPickerNodes] = useState<PickerNode[]>([]);
   const [pickerLoaded, setPickerLoaded] = useState(false);
+  // "Add Master Node" (QR scan) lives here now, not on a separate mesh page.
+  const [addNodeOpen, setAddNodeOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +174,25 @@ export const EventsPage: React.FC = () => {
     };
   }, []);
 
+  // After a new master node is linked: re-read the owner's nodes/trees and
+  // the detailed picker cards so it shows up straight away.
+  const reloadNodes = useCallback(async () => {
+    try {
+      const res = await ownerApi.trees();
+      setNodes(res.nodes);
+      setTrees(res.trees);
+    } catch {
+      /* the next poll / reload will catch up */
+    }
+    try {
+      const detailed: any = await ownerApi.nodes();
+      setPickerNodes(detailed || []);
+      setPickerLoaded(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // Keep the selected tree's chip in view -- with 50 trees the row scrolls.
   useEffect(() => {
     selectedChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
@@ -178,14 +201,14 @@ export const EventsPage: React.FC = () => {
   const multiNode = nodes.length > 1;
   const validNodeParam = nodeParam && nodes.some((n) => n.id === nodeParam) ? nodeParam : null;
   // Show the "which master node?" step until the owner has picked one.
-  const pickerOpen = treesReady && multiNode && !validNodeParam;
+  const pickerOpen = treesReady && !validNodeParam;
   const pickerOpenRef = useRef(false);
   pickerOpenRef.current = pickerOpen;
 
   // Follow the picked node (or the only node) -- select its active tree.
   useEffect(() => {
     if (!treesReady) return;
-    const target = validNodeParam ?? (nodes.length === 1 ? nodes[0].id : null);
+    const target = validNodeParam;
     if (target === nodeId) return;
     setNodeId(target);
     if (target) {
@@ -317,7 +340,7 @@ export const EventsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!treesReady || pickerOpen || (multiNode && !nodeId)) return;
+    if (!treesReady || pickerOpen || (nodes.length > 0 && !nodeId)) return;
     let cancelled = false;
     setLoading(true);
     ownerApi
@@ -372,7 +395,38 @@ export const EventsPage: React.FC = () => {
       }));
   const enabledCount = panels.filter((p) => p.enabled).length;
 
-  // ---- Step 1 (only with 2+ master nodes): which master node? ---------
+  const addNodeButton = (
+    <button
+      type="button"
+      onClick={() => setAddNodeOpen(true)}
+      className="flex items-center gap-2 px-3.5 py-2 rounded bg-[#D4AF37] hover:bg-[#E5C158] text-black font-bold text-[11px] uppercase tracking-wider transition-colors"
+    >
+      <QrCode className="w-3.5 h-3.5" />
+      Add Master Node
+    </button>
+  );
+  const addNodeUi = (
+    <>
+      {addNodeOpen && (
+        <AddMasterNodeModal
+          onClose={() => setAddNodeOpen(false)}
+          onLinked={(node) => {
+            reloadNodes();
+            setToast(`${node.id} added to your account.`);
+            setTimeout(() => setToast(null), 3500);
+          }}
+        />
+      )}
+      {toast && (
+        <div className="fixed bottom-4 right-4 sm:bottom-8 sm:right-8 z-50 rounded bg-[#141414] border border-[#D4AF37] text-white px-4 py-3 sm:px-5 sm:py-3.5 font-medium text-xs shadow-2xl flex items-center gap-3 max-w-[90vw]">
+          <CheckCircle className="w-4 h-4 text-[#D4AF37] flex-shrink-0" />
+          <span className="truncate">{toast}</span>
+        </div>
+      )}
+    </>
+  );
+
+  // ---- Step 1: which master node? ------------------------------------
   if (pickerOpen) {
     const list: PickerNode[] = pickerNodes.length
       ? pickerNodes
@@ -383,8 +437,14 @@ export const EventsPage: React.FC = () => {
           eyebrow="Farm Owner Portal"
           subtitle="Vibration Events"
           title="Choose a Master Node"
-          description="You have more than one master node. Pick the one whose vibration events you want to open."
+          description="Select the master node whose vibration events you want to open, or add a new one by scanning its QR sticker."
+          actions={addNodeButton}
         />
+        {list.length === 0 && (
+          <div className="rounded bg-[#141414] border border-[#262626] p-10 text-center text-xs text-[#808080]">
+            No master nodes are linked to your account yet. Use "Add Master Node" to scan the QR sticker on your device.
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {list.map((node, i) => (
             <button
@@ -458,6 +518,7 @@ export const EventsPage: React.FC = () => {
           ))}
         </div>
         <PageFooterNote icon={Radio} text="Each master node has its own trees and its own four piezo transducers. You can switch master nodes at any time from the Vibration Events page." />
+        {addNodeUi}
       </div>
     );
   }
@@ -475,7 +536,7 @@ export const EventsPage: React.FC = () => {
           been placed on. Choosing one puts the device on that tree. */}
       {nodes.length > 0 && (
         <div className="space-y-3">
-          {multiNode && (
+          {nodes.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] uppercase font-bold tracking-widest text-[#808080]">Master node</span>
               <span className="px-2.5 py-1 rounded text-[11px] font-semibold border bg-[#D4AF37] text-black border-[#D4AF37]">
@@ -488,6 +549,7 @@ export const EventsPage: React.FC = () => {
               >
                 <ArrowLeftRight className="w-3 h-3" /> Change
               </button>
+              <span className="ml-auto">{addNodeButton}</span>
             </div>
           )}
 
@@ -898,6 +960,7 @@ export const EventsPage: React.FC = () => {
         icon={Gauge}
         text="Piezoelectric transducers sample continuously; readings above 6g sustained for more than a few seconds typically indicate active boring activity."
       />
+      {addNodeUi}
     </div>
   );
 };

@@ -14,7 +14,6 @@ import { NotificationsPage } from './pages/NotificationsPage';
 import { EventsPage } from './pages/EventsPage';
 import { PiezoDetailPage } from './pages/PiezoDetailPage';
 import { AlertHistoryPage } from './pages/AlertHistoryPage';
-import { MasterNodesPage } from './pages/MasterNodesPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { HelpPage } from './pages/HelpPage';
@@ -128,7 +127,7 @@ const OwnerRoutes: React.FC = () => (
       <Route path="events" element={<EventsPage />} />
       <Route path="events/piezo/:piezoId" element={<PiezoDetailPage />} />
       <Route path="alerts" element={<AlertHistoryPage />} />
-      <Route path="nodes" element={<MasterNodesPage />} />
+      <Route path="nodes" element={<Navigate to="/owner/events" replace />} />
       <Route path="profile" element={<ProfilePage />} />
       <Route path="settings" element={<SettingsPage />} />
       <Route path="help" element={<HelpPage />} />
