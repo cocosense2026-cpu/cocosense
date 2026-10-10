@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { levelFromSeverity, LEVEL_LABEL, LEVEL_STYLE } from '../../utils/severity';
 import {
   AlertTriangle,
   Search,
@@ -188,7 +189,7 @@ export const AlertHistoryPage: React.FC = () => {
     const matchesSearch =
       pestName.toLowerCase().includes(q) ||
       (a.sector ?? '').toLowerCase().includes(q);
-    const matchesSeverity = severityFilter === 'ALL' || a.severity === severityFilter;
+    const matchesSeverity = severityFilter === 'ALL' || levelFromSeverity(a.severity) === severityFilter;
     const matchesStatus =
       statusFilter === 'ALL' ||
       (statusFilter === 'UNRESOLVED' && !a.reviewed) ||
@@ -212,7 +213,7 @@ export const AlertHistoryPage: React.FC = () => {
   } = usePasswordProtectedExport();
 
   const exportAlertsCsv = () => {
-    const headers = ['Alert ID', 'Tree', 'Piezo', 'Node', 'Sector', 'Pest Type', 'Severity', 'Frequency Hz', 'Threat %', 'Timestamp', 'Reviewed'];
+    const headers = ['Alert ID', 'Tree', 'Piezo', 'Node', 'Sector', 'Pest Type', 'Severity', 'Frequency Hz', 'Timestamp', 'Reviewed'];
     const rows = filteredAlerts.map((a) => [
       a.id,
       `"${currentTree?.name ?? ''}"`,
@@ -220,9 +221,8 @@ export const AlertHistoryPage: React.FC = () => {
       a.nodeId ?? '',
       `"${a.sector ?? ''}"`,
       `"${a.pest || a.pestType || 'Pest Anomaly'}"`,
-      a.severity,
+      LEVEL_LABEL[levelFromSeverity(a.severity) ?? 'normal'],
       a.frequencyHz,
-      a.threatScore || 85,
       `"${a.createdAt || a.timestamp}"`,
       a.reviewed ? 'YES' : 'NO',
     ]);
@@ -405,9 +405,9 @@ export const AlertHistoryPage: React.FC = () => {
             className="px-3 py-2 rounded bg-[#0A0A0A] border border-[#262626] text-xs text-[#E0E0E0] focus:border-[#D4AF37] focus:outline-none"
           >
             <option value="ALL">All Severities</option>
-            <option value="CRITICAL">Critical Only</option>
-            <option value="WARNING">Warning Only</option>
-            <option value="INFO">Info Only</option>
+            <option value="critical">Critical Only</option>
+            <option value="elevated">Elevated Only</option>
+            <option value="normal">Normal Only</option>
           </select>
 
           <div className="flex items-center rounded bg-[#0A0A0A] border border-[#262626] p-0.5">
@@ -447,30 +447,20 @@ export const AlertHistoryPage: React.FC = () => {
           </div>
         ) : (
           filteredAlerts.map((alert) => {
-            const isCrit = alert.severity === 'CRITICAL';
-            const isWarn = alert.severity === 'WARNING';
+            const level = levelFromSeverity(alert.severity) ?? 'normal';
+            const lv = LEVEL_STYLE[level];
             return (
               <div
                 key={alert.id}
                 className={`rounded-lg border p-5 transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
                   alert.reviewed
                     ? 'bg-[#101010] border-[#262626] opacity-60'
-                    : isCrit
-                    ? 'bg-[#1C1212] border-[#F44336]/40'
-                    : isWarn
-                    ? 'bg-[#1C1810] border-[#D4AF37]/40'
-                    : 'bg-[#141414] border-[#262626]'
+                    : lv.card
                 }`}
               >
                 <div className="flex items-start gap-3.5 min-w-0">
                   <div
-                    className={`p-3 rounded flex-shrink-0 ${
-                      isCrit
-                        ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
-                        : isWarn
-                        ? 'bg-[#262010] text-[#D4AF37] border border-[#D4AF37]/30'
-                        : 'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
-                    }`}
+                    className={`p-3 rounded flex-shrink-0 ${lv.iconBox}`}
                   >
                     <AlertTriangle className="w-5 h-5" />
                   </div>
@@ -479,13 +469,9 @@ export const AlertHistoryPage: React.FC = () => {
                       <span className="font-mono font-bold text-white text-base break-all">{currentTree?.name ?? alert.treeId ?? alert.nodeId ?? 'Unassigned'} &middot; Piezo {PIEZO_PINS.indexOf(pin) + 1}</span>
                       {alert.sector && <span className="text-xs text-[#808080] font-mono">{alert.sector}</span>}
                       <span
-                        className={`px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
-                          isCrit
-                            ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
-                            : 'bg-[#262010] text-[#D4AF37] border border-[#D4AF37]/30'
-                        }`}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${lv.badge}`}
                       >
-                        {alert.severity}
+                        {LEVEL_LABEL[level]}
                       </span>
                       {alert.reviewed && (
                         <span className="px-2 py-0.5 rounded bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30 text-[10px] font-mono">
@@ -505,13 +491,6 @@ export const AlertHistoryPage: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-4 self-end md:self-center flex-shrink-0">
-                  <div className="text-right font-mono">
-                    <span className={`text-xl font-bold ${isCrit ? 'text-[#F44336]' : 'text-[#D4AF37]'}`}>
-                      {alert.threatScore || (isCrit ? 92 : 55)}%
-                    </span>
-                    <div className="text-[9px] uppercase font-mono text-[#808080]">Threat Index</div>
-                  </div>
-
                   {!alert.reviewed && (
                     <button
                       type="button"
@@ -520,7 +499,7 @@ export const AlertHistoryPage: React.FC = () => {
                       className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#E2BE4A] disabled:opacity-60 text-black font-bold text-xs uppercase tracking-wider transition-colors"
                     >
                       {reviewingId === alert.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Mark Reviewed
+                      Mark as Review
                     </button>
                   )}
                 </div>

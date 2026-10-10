@@ -118,6 +118,7 @@ export interface NotificationItem {
   // but the string fallback is kept for older rows already sitting in the
   // database from before this change.
   category: 'PEST' | string;
+  severity?: string;
   createdAt?: string;
   timestamp?: string;
   isRead?: boolean;

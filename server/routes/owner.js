@@ -259,7 +259,7 @@ router.post('/owner/auth/signup', async (req, res) => {
   let linkedNodeId = null;
   if (node) {
     const result = await db
-      .prepare(`UPDATE master_nodes SET owner_id = ?, online = 1, last_ping = datetime('now'), linked_at = datetime('now') WHERE id = ? AND owner_id IS NULL`)
+      .prepare(`UPDATE master_nodes SET owner_id = ?, linked_at = datetime('now') WHERE id = ? AND owner_id IS NULL`)
       .run(id, node.id);
     if (result.changes > 0) {
       await restampRowHash(db, 'master_nodes', 'id', node.id);
@@ -690,7 +690,7 @@ router.post('/owner/nodes/link', requireOwnerAuth, async (req, res) => {
   // Same race-safe guard as the sign-up path: only succeeds if the node
   // is still unclaimed at the moment this UPDATE runs.
   const result = await db
-    .prepare(`UPDATE master_nodes SET owner_id = ?, online = 1, last_ping = datetime('now'), linked_at = datetime('now') WHERE id = ? AND owner_id IS NULL`)
+    .prepare(`UPDATE master_nodes SET owner_id = ?, linked_at = datetime('now') WHERE id = ? AND owner_id IS NULL`)
     .run(req.ownerRow.id, node.id);
   if (result.changes === 0) {
     return res.status(409).json({ ok: false, error: `${node.id} was just claimed by another account. Ask an admin to check it.`, reason: 'already_linked' });
@@ -1201,6 +1201,7 @@ async function ownerNotificationFeed(ownerId) {
     title: a.title || a.pest || 'Sensor Alert',
     message: a.description || `${a.pest ?? 'Unusual activity'} detected in ${a.sector ?? 'your estate'}.`,
     category: 'alert',
+    severity: a.severity,
     createdAt: a.createdAt,
     isRead: !!a.reviewed,
   }));

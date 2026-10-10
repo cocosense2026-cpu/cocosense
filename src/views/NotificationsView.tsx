@@ -1,4 +1,5 @@
 import React from 'react';
+import { levelOfNotification, LEVEL_LABEL, LEVEL_STYLE } from '../utils/severity';
 import { NotificationItem } from '../types';
 import { 
   Bell, 
@@ -68,7 +69,10 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
             <h3 className="font-bold text-white text-base">No pest detection notifications yet</h3>
           </div>
         ) : (
-          filtered.map(item => (
+          filtered.map(item => {
+            const level = levelOfNotification(item);
+            const lv = LEVEL_STYLE[level];
+            return (
             <div
               key={item.id}
               onClick={() => onToggleRead(String(item.id))}
@@ -79,13 +83,16 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
               }`}
             >
               <div className="flex items-start gap-3.5">
-                <div className="p-2.5 rounded flex-shrink-0 bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30">
+                <div className={`p-2.5 rounded flex-shrink-0 ${lv.iconBox}`}>
                   <AlertTriangle className="w-4 h-4" />
                 </div>
 
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-sm text-white">{item.title}</h4>
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase tracking-wider ${lv.badge}`}>
+                      {LEVEL_LABEL[level]}
+                    </span>
                     {!item.read && (
                       <span className="w-2 h-2 rounded-full bg-[#D4AF37] animate-pulse"></span>
                     )}
@@ -98,7 +105,8 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                 </div>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { levelOfNotification, LEVEL_LABEL, LEVEL_STYLE } from '../../utils/severity';
 import { Bell, CheckCheck, AlertTriangle, Bug, Trash2, Clock, Inbox } from 'lucide-react';
 import { ownerApi } from '../api';
 import { PageHero } from '../../components/PageHero';
@@ -13,6 +14,7 @@ interface NotifItem {
   category: string;
   createdAt: string;
   isRead: boolean;
+  severity?: string;
 }
 
 // Pest detection is the only notification category now, so "All" and
@@ -157,7 +159,7 @@ export const NotificationsPage: React.FC = () => {
         ) : (
           notifications.map((item) => {
             const Icon = ICONS[item.icon || 'bell'] || Bell;
-            const isAlert = item.category === 'alert';
+            const lv = LEVEL_STYLE[levelOfNotification(item)];
             return (
               <div
                 key={item.id}
@@ -167,17 +169,16 @@ export const NotificationsPage: React.FC = () => {
               >
                 <div className="flex items-start gap-3.5 min-w-0">
                   <div
-                    className={`p-2.5 rounded flex-shrink-0 ${
-                      isAlert
-                        ? 'bg-[#2B1B1B] text-[#F44336] border border-[#F44336]/30'
-                        : 'bg-[#141414] text-[#4CAF50] border border-[#4CAF50]/30'
-                    }`}
+                    className={`p-2.5 rounded flex-shrink-0 ${lv.iconBox}`}
                   >
                     <Icon className="w-4 h-4" />
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-sm text-white truncate">{item.title}</h4>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase tracking-wider flex-shrink-0 ${lv.badge}`}>
+                        {LEVEL_LABEL[levelOfNotification(item)]}
+                      </span>
                       {!item.isRead && <span className="w-2 h-2 rounded-full bg-[#D4AF37] animate-pulse flex-shrink-0"></span>}
                     </div>
                     <p className="text-xs text-[#E0E0E0] mt-0.5">{item.message}</p>
