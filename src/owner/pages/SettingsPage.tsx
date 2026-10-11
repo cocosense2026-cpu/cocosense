@@ -18,14 +18,14 @@ interface OwnerSettings {
 }
 
 const TOGGLES: Array<{ key: keyof OwnerSettings; icon: React.ComponentType<any>; label: string; desc: string; danger?: boolean }> = [
-  { key: 'notifyEmail', icon: Mail, label: 'Email Notifications', desc: 'Receive alert and report summaries by email.' },
+  { key: 'notifyEmail', icon: Mail, label: 'Email Notifications', desc: 'Send alert emails to the address on your account.' },
   { key: 'notifyPush', icon: Bell, label: 'Push Notifications', desc: 'In-app and browser push notifications.' },
   { key: 'localBuzzerAlert', icon: Activity, label: 'Local Buzzer Alert', desc: 'Sound the on-site buzzer for critical events.' },
   {
     key: 'notifyCriticalOnly',
     icon: ShieldCheck,
     label: 'Critical Alerts Only',
-    desc: 'Suppress low-priority notifications entirely.',
+    desc: 'On: only Critical alerts are sent (by email too). Off: every alert, Elevated and Critical, is sent.',
     danger: true,
   },
 ];

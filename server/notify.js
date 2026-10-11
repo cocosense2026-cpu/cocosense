@@ -77,12 +77,15 @@ export async function notifyOwner(ownerId, { title, message, icon = 'bell', cate
     await restampRowHash(db, 'notifications', 'id', insert.lastInsertRowid);
   }
 
+  // Email channel: Email Notifications must be ON. With "Critical Alerts
+  // Only" ON we only get here for Critical events (the early return above);
+  // with it OFF every event (Elevated and Critical) is emailed.
   if (settings.notifyEmail && owner.email) {
     await sendMail({
       toName: owner.name,
       toEmail: owner.email,
-      subject: `CocoSense Alert: ${title}`,
-      body: `${message}\n\n— CocoSense Smart Plantation Monitoring`,
+      subject: `CocoSense ${isCritical ? 'Critical' : 'Elevated'} Alert: ${title}`,
+      body: `Severity: ${isCritical ? 'Critical' : 'Elevated'}\n${message}\n\n— CocoSense Smart Plantation Monitoring`,
       category,
     });
   }
