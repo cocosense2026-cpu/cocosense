@@ -170,16 +170,18 @@ export const adminApi = {
         municipality ? `&municipality=${encodeURIComponent(municipality)}` : ''
       }`
     ),
-  // One month as a CSV (Blob) covering ALL municipalities (overall). A fetch with the bearer token rather than a
+  // One month as a CSV (Blob): one municipality, or all of them when none is given. A fetch with the bearer token rather than a
   // plain <a href>, so it stays behind the admin login.
-  downloadVibrationReport: async (month: string): Promise<Blob> => {
+  downloadVibrationReport: async (month: string, municipality?: string | null): Promise<Blob> => {
     const token = getAdminToken();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
     let resp: Response;
     try {
       resp = await fetch(
-        `${ADMIN_API_BASE}/admin/reports/vibration/export?month=${encodeURIComponent(month)}&tz=${-new Date().getTimezoneOffset()}`,
+        `${ADMIN_API_BASE}/admin/reports/vibration/export?month=${encodeURIComponent(month)}&tz=${-new Date().getTimezoneOffset()}${
+          municipality ? `&municipality=${encodeURIComponent(municipality)}` : ''
+        }`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal }
       );
     } catch (err) {

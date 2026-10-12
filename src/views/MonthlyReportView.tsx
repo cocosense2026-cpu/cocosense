@@ -8,8 +8,8 @@ import { VibrationStrengthChart, VibrationStrengthPoint } from '../components/Vi
 
 // Monthly Report -- month-by-month vibration for ONE municipality at a time
 // (picked at the top of the page; server: GET /admin/reports/vibration).
-// Downloads are different: the CSV always covers ALL municipalities together
-// (overall totals plus a per-municipality breakdown).
+// Every month can be downloaded for the municipality on screen OR as an
+// overall file covering all municipalities together.
 //
 // The list is always newest first: the CURRENT month sits at the top and
 // is still collecting readings; every earlier month is closed and sits
@@ -193,9 +193,10 @@ const MonthCard: React.FC<{
   open: boolean;
   onToggle: () => void;
   data: ReportData;
-  onDownload: () => void;
-  downloading: boolean;
-  /** Another month's download is already running. */
+  onDownload: (all: boolean) => void;
+  /** Which download of this month is running: 'muni', 'all' or null. */
+  downloading: 'muni' | 'all' | null;
+  /** Some download is already running. */
   downloadLocked: boolean;
 }> = ({ month, open, onToggle, data, onDownload, downloading, downloadLocked }) => {
   const t = month.totals;
@@ -267,16 +268,25 @@ const MonthCard: React.FC<{
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4">
                 <p className="text-[11px] text-[#808080] leading-snug">
                   {month.isCurrent
-                    ? `${monthLabel(month)} so far. The download covers all municipalities, not just ${data.municipality ?? 'this one'}.`
-                    : `The download covers all municipalities for ${monthLabel(month)}, not just ${data.municipality ?? 'this one'}.`}
+                    ? `${monthLabel(month)} so far — everything recorded up to now.`
+                    : `Full vibration record for ${monthLabel(month)}.`}
                 </p>
-                <DownloadButton
-                  label={`Download ${monthLabel(month)} (all municipalities)`}
-                  busy={downloading}
-                  disabled={downloadLocked}
-                  title={`Download the overall ${monthLabel(month)} vibration report for all municipalities (CSV)`}
-                  onClick={onDownload}
-                />
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <DownloadButton
+                    label={`Download ${data.municipality ?? 'municipality'}`}
+                    busy={downloading === 'muni'}
+                    disabled={downloadLocked}
+                    title={`Download the ${monthLabel(month)} vibration report for ${data.municipality ?? 'this municipality'} (CSV)`}
+                    onClick={() => onDownload(false)}
+                  />
+                  <DownloadButton
+                    label="Download all municipalities"
+                    busy={downloading === 'all'}
+                    disabled={downloadLocked}
+                    title={`Download the overall ${monthLabel(month)} vibration report for all municipalities (CSV)`}
+                    onClick={() => onDownload(true)}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -406,16 +416,18 @@ export const MonthlyReportView: React.FC = () => {
   };
 
   const handleDownload = useCallback(
-    async (key: string) => {
+    async (key: string, all: boolean) => {
       if (downloadingKey) return;
-      setDownloadingKey(key);
+      setDownloadingKey(`${key}|${all ? 'all' : 'muni'}`);
       setDownloadError(null);
+      const muni = all ? null : data?.municipality ?? null;
       try {
-        const blob = await adminApi.downloadVibrationReport(key);
+        const blob = await adminApi.downloadVibrationReport(key, muni);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `cocosense-monthly-report-${key}.csv`;
+        const slug = muni ? '-' + muni.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+        a.download = `cocosense-monthly-report-${key}${slug}.csv`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -426,7 +438,7 @@ export const MonthlyReportView: React.FC = () => {
         setDownloadingKey(null);
       }
     },
-    [downloadingKey]
+    [downloadingKey, data?.municipality]
   );
 
   const currentMonth = data?.months.find((m) => m.isCurrent);
@@ -438,20 +450,29 @@ export const MonthlyReportView: React.FC = () => {
         eyebrow="Admin Console"
         subtitle="Monthly Report"
         title="Monthly Report"
-        description="A month-by-month summary of the vibration picked up in one municipality at a time. Choose a municipality below. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list. Downloads cover all municipalities together."
+        description="A month-by-month summary of the vibration picked up in one municipality at a time. Choose a municipality below. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list. Download a month for the municipality you picked, or for all municipalities together."
         actions={
-          <DownloadButton
-            variant="primary"
-            label="Download current report (all municipalities)"
-            busy={!!currentMonth && downloadingKey === currentMonth.key}
-            disabled={!currentMonth || currentEmpty || (!!downloadingKey && downloadingKey !== currentMonth.key)}
-            title={
-              currentEmpty
-                ? 'No vibration readings have been recorded this month yet'
-                : `Download the overall ${monthLabel(currentMonth!)} vibration report for all municipalities (CSV)`
-            }
-            onClick={() => currentMonth && handleDownload(currentMonth.key)}
-          />
+          <div className="flex flex-col sm:flex-row gap-2">
+            <DownloadButton
+              variant="primary"
+              label={`Download current: ${data?.municipality ?? 'municipality'}`}
+              busy={!!currentMonth && downloadingKey === `${currentMonth.key}|muni`}
+              disabled={!currentMonth || currentEmpty || !!downloadingKey}
+              title={
+                currentEmpty
+                  ? 'No vibration readings have been recorded this month yet'
+                  : `Download the ${monthLabel(currentMonth!)} vibration report for ${data?.municipality ?? 'this municipality'} (CSV)`
+              }
+              onClick={() => currentMonth && handleDownload(currentMonth.key, false)}
+            />
+            <DownloadButton
+              label="Download current: all municipalities"
+              busy={!!currentMonth && downloadingKey === `${currentMonth.key}|all`}
+              disabled={!currentMonth || !!downloadingKey}
+              title={`Download the overall ${monthLabel(currentMonth ?? ({ year: 0, month: 1 } as MonthReport))} vibration report for all municipalities (CSV)`}
+              onClick={() => currentMonth && handleDownload(currentMonth.key, true)}
+            />
+          </div>
         }
       />
 
@@ -531,9 +552,11 @@ export const MonthlyReportView: React.FC = () => {
               open={openKeys.has(m.key)}
               onToggle={() => toggle(m.key)}
               data={data}
-              onDownload={() => handleDownload(m.key)}
-              downloading={downloadingKey === m.key}
-              downloadLocked={!!downloadingKey && downloadingKey !== m.key}
+              onDownload={(all) => handleDownload(m.key, all)}
+              downloading={
+                downloadingKey === `${m.key}|muni` ? 'muni' : downloadingKey === `${m.key}|all` ? 'all' : null
+              }
+              downloadLocked={!!downloadingKey}
             />
           ))}
           {data.months.length === 1 && (
@@ -546,7 +569,7 @@ export const MonthlyReportView: React.FC = () => {
 
       <PageFooterNote
         icon={FileText}
-        text="Months follow your local calendar. The page shows the municipality you picked; every download is the overall report for all municipalities, with the totals, a per-municipality breakdown, a per-sensor breakdown and the full log. Only readings from working sensors are counted, and a month's figures are final once it closes. Files open in Excel or Google Sheets."
+        text="Months follow your local calendar. The page shows the municipality you picked. You can download a month for that municipality alone, or the overall file for all municipalities (totals, a per-municipality breakdown, per-sensor breakdown and the full log). Only readings from working sensors are counted, and a month's figures are final once it closes. Files open in Excel or Google Sheets."
       />
     </div>
   );

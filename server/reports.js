@@ -68,6 +68,7 @@ export function municipalityScope(name) {
     nodeName: `(n.name || ' - ' || COALESCE(fo.name, n.owner_id))`,
     muni: MUNI_NAME_SQL,
     muniKey: MUNI_KEY_SQL,
+    single: String(name ?? ''),
   };
 }
 
@@ -277,7 +278,9 @@ export async function buildVibrationCsv(scope, month, tz) {
   const base = baseSql(scope, `r.bucket_ts >= ? AND r.bucket_ts < ?`);
   const args = [...scope.args, startSec, endSec];
 
-  const withMuni = !!scope.muni;
+  // Overall (all municipalities) gets municipality columns and a breakdown;
+  // a single-municipality file is just that municipality's own report.
+  const withMuni = !!scope.muni && scope.single == null;
   const [totals, sensors, rows, munis] = await Promise.all([
     db
       .prepare(
@@ -338,7 +341,14 @@ export async function buildVibrationCsv(scope, month, tz) {
   const avgHz = totals.avg_hz == null ? null : Number(Number(totals.avg_hz).toFixed(1));
 
   const out = [
-    csvLine([withMuni ? 'CocoSense Monthly Vibration Report - All Municipalities (Overall)' : 'CocoSense Monthly Vibration Report']),
+    csvLine([
+      withMuni
+        ? 'CocoSense Monthly Vibration Report - All Municipalities (Overall)'
+        : scope.single != null
+        ? `CocoSense Monthly Vibration Report - ${scope.single}`
+        : 'CocoSense Monthly Vibration Report',
+    ]),
+    ...(scope.single != null ? [csvLine(['Municipality', scope.single])] : []),
     csvLine(['Month', monthName]),
     ...(withMuni ? [csvLine(['Municipalities included', munis.length])] : []),
     csvLine(['Status', isCurrent ? `In progress (day ${localNow.getUTCDate()} of ${daysInMonth})` : 'Closed']),

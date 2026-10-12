@@ -134,15 +134,25 @@ router.get('/admin/reports/vibration', requireAdminAuth, async (req, res) => {
 });
 
 // GET /admin/reports/vibration/export?month=2026-08&tz=480 -> a CSV of that
-// month for ALL municipalities together (overall totals plus a per-municipality
-// breakdown), whichever municipality is open on screen. A fetch with the bearer token (not a plain link) so it stays behind
+// month: all municipalities together by default (overall totals plus a
+// per-municipality breakdown), or one municipality with &municipality=Name. A fetch with the bearer token (not a plain link) so it stays behind
 // the admin login.
 router.get('/admin/reports/vibration/export', requireAdminAuth, async (req, res) => {
   const month = String(req.query.month ?? '');
-  const result = await buildVibrationCsv(allOwnersScope(), month, parseTz(req.query.tz));
+  // ?municipality=Name -> only that municipality; omitted -> all of them.
+  const asked = String(req.query.municipality ?? '').trim().toLowerCase();
+  let scope = allOwnersScope();
+  let suffix = '';
+  if (asked) {
+    const match = (await listMunicipalities()).find((m) => m.name.toLowerCase() === asked);
+    if (!match) return res.status(404).json({ ok: false, error: 'That municipality was not found.' });
+    scope = municipalityScope(match.name);
+    suffix = '-' + match.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  const result = await buildVibrationCsv(scope, month, parseTz(req.query.tz));
   if (result.error) return res.status(result.status).json({ ok: false, error: result.error });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="cocosense-monthly-report-${month}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="cocosense-monthly-report-${month}${suffix}.csv"`);
   res.setHeader('Cache-Control', 'no-store');
   res.send(result.csv);
 });
