@@ -409,7 +409,35 @@ CREATE TABLE IF NOT EXISTS owner_hidden_items (
   PRIMARY KEY (owner_id, item_type, item_id)
 );
 
+-- Every time an owner changes a piezo's Infected / Cleared note on a tree, one
+-- row lands here (status 'INFECTED', 'CLEARED', or 'RESET' when the note is
+-- removed). tree_piezo_state only holds the CURRENT note, so this history is
+-- what lets the admin Monthly Report say how many trees were infected /
+-- cleared at the end of any past month: the latest row per tree + piezo wins,
+-- so marking a tree Cleared takes it out of Infected and into Cleared.
+CREATE TABLE IF NOT EXISTS tree_pest_events (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_tree_id    INTEGER NOT NULL,
+  piezo_sensor_id TEXT    NOT NULL,
+  status          TEXT    NOT NULL CHECK (status IN ('INFECTED', 'CLEARED', 'RESET')),
+  at_ts           INTEGER NOT NULL  -- unix seconds
+);
+
+-- One-time backfill: notes set before this table existed become one event
+-- each, stamped with when the note was last changed. Does nothing once a
+-- tree + piezo has any history.
+INSERT INTO tree_pest_events (node_tree_id, piezo_sensor_id, status, at_ts)
+SELECT s.node_tree_id, s.piezo_sensor_id, s.pest_status,
+       CAST(strftime('%s', COALESCE(s.updated_at, datetime('now'))) AS INTEGER)
+  FROM tree_piezo_state s
+ WHERE s.pest_status IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM tree_pest_events e
+      WHERE e.node_tree_id = s.node_tree_id AND e.piezo_sensor_id = s.piezo_sensor_id
+   );
+
 -- ==INDEXES==
+CREATE INDEX IF NOT EXISTS idx_tree_pest_events_lookup ON tree_pest_events (node_tree_id, piezo_sensor_id, at_ts);
 -- (do not remove the marker above -- server/db.js splits the file here
 -- so table migrations can run before indexes reference new columns)
 CREATE INDEX IF NOT EXISTS idx_vibration_events_time ON vibration_events(timestamp DESC);

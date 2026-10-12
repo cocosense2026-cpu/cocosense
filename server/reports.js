@@ -107,6 +107,42 @@ function baseSql(scope, range) {
        AND ${range}`;
 }
 
+// Infected / Cleared per sensor as of `endSec` (unix seconds): for every tree +
+// piezo the LATEST note before then decides. Marking a tree Infected adds one
+// to Infected; when it is later marked Cleared the same tree leaves Infected
+// and is counted under Cleared instead (a removed note counts as neither).
+// Returns Map<piezoId, {nodeId, nodeName, muni, infected, cleared}>.
+async function pestStateAt(scope, endSec) {
+  const rows = await db
+    .prepare(
+      `SELECT x.piezo_id AS piezo_id, MAX(x.node_id) AS node_id, MAX(x.node_name) AS node_name, MAX(x.muni) AS muni,
+              SUM(CASE WHEN x.status = 'INFECTED' THEN 1 ELSE 0 END) AS infected,
+              SUM(CASE WHEN x.status = 'CLEARED' THEN 1 ELSE 0 END) AS cleared
+         FROM (
+           SELECT e.piezo_sensor_id AS piezo_id, e.status AS status, n.id AS node_id,
+                  ${scope.nodeName} AS node_name, ${scope.muniKey ?? 'NULL'} AS muni,
+                  ROW_NUMBER() OVER (PARTITION BY e.node_tree_id, e.piezo_sensor_id ORDER BY e.at_ts DESC, e.id DESC) AS rn
+             FROM tree_pest_events e
+             JOIN node_trees t ON t.id = e.node_tree_id
+             JOIN master_nodes n ON n.id = t.node_id
+             ${scope.join}
+            WHERE ${scope.where} AND e.at_ts < ?
+         ) x
+        WHERE x.rn = 1
+        GROUP BY x.piezo_id`
+    )
+    .all(...scope.args, endSec);
+  const out = new Map();
+  for (const r of rows) {
+    const infected = Number(r.infected ?? 0);
+    const cleared = Number(r.cleared ?? 0);
+    if (infected || cleared) {
+      out.set(r.piezo_id, { nodeId: r.node_id, nodeName: r.node_name, muni: r.muni, infected, cleared });
+    }
+  }
+  return out;
+}
+
 const num = (v, digits = 2) => (v == null ? 0 : Number(Number(v).toFixed(digits)));
 
 export async function buildVibrationReport(scope, tz) {
@@ -160,6 +196,20 @@ export async function buildVibrationReport(scope, tz) {
   keys.add(currentKey); // current month is always shown
   const ordered = [...keys].filter((k) => k <= currentKey).sort().reverse().slice(0, REPORT_MAX_MONTHS);
 
+  // Infected / Cleared as of the end of each month (right now for the current one).
+  const pestByMonth = new Map(
+    await Promise.all(
+      ordered.map(async (key) => {
+        const [yy, mm] = key.split('-').map(Number);
+        const endSec =
+          key === currentKey
+            ? Math.floor(Date.now() / 1000) + 1
+            : Math.floor((Date.UTC(yy, mm, 1) - tz * 60000) / 1000);
+        return [key, await pestStateAt(scope, endSec)];
+      })
+    )
+  );
+
   const months = ordered.map((key) => {
     const [y, m] = key.split('-').map(Number);
     const isCurrent = key === currentKey;
@@ -176,21 +226,46 @@ export async function buildVibrationReport(scope, tz) {
     const seriesLen = isCurrent ? Math.max(1, Math.min(totalBuckets, nowBucket - startBucket + 1)) : totalBuckets;
     const series = Array.from({ length: seriesLen }, (_, i) => num(bucketPeaks.get(startBucket + i)));
 
+    const pestMap = pestByMonth.get(key) ?? new Map();
+    const seen = new Set();
+    const labelOf = (piezoId) => {
+      const idx = PIEZO_PINS.indexOf(String(piezoId ?? '').split('-').pop());
+      return idx >= 0 ? `Piezo ${idx + 1}` : 'Piezo';
+    };
     const piezos = piezoRows
       .filter((x) => x.month === key)
       .map((x) => {
-        const pin = String(x.piezo_id ?? '').split('-').pop();
-        const idx = PIEZO_PINS.indexOf(pin);
+        seen.add(x.piezo_id);
+        const pest = pestMap.get(x.piezo_id);
         return {
           piezoId: x.piezo_id,
           nodeId: x.node_id,
           nodeName: x.node_name,
-          label: idx >= 0 ? `Piezo ${idx + 1}` : 'Piezo',
+          label: labelOf(x.piezo_id),
           readings: Number(x.readings),
           avgGrams: num(x.avg_grams),
           peakGrams: num(x.peak_grams),
+          infected: pest?.infected ?? 0,
+          cleared: pest?.cleared ?? 0,
         };
       })
+      // A sensor with an infected / cleared tree still belongs in the table
+      // even if it recorded no readings that month.
+      .concat(
+        [...pestMap.entries()]
+          .filter(([piezoId]) => !seen.has(piezoId))
+          .map(([piezoId, p]) => ({
+            piezoId,
+            nodeId: p.nodeId,
+            nodeName: p.nodeName,
+            label: labelOf(piezoId),
+            readings: 0,
+            avgGrams: 0,
+            peakGrams: 0,
+            infected: p.infected,
+            cleared: p.cleared,
+          }))
+      )
       .sort((a, b) => String(a.nodeId).localeCompare(String(b.nodeId)) || a.label.localeCompare(b.label));
 
     return {
@@ -209,6 +284,8 @@ export async function buildVibrationReport(scope, tz) {
         critical,
         elevated,
         normal: Math.max(0, readings - critical - elevated),
+        infectedTrees: [...pestMap.values()].reduce((a, p) => a + p.infected, 0),
+        clearedTrees: [...pestMap.values()].reduce((a, p) => a + p.cleared, 0),
       },
       // UTC instant of local midnight on the 1st; point i of `series` is the
       // window starting startsAt + i * bucketMinutes.
@@ -281,7 +358,8 @@ export async function buildVibrationCsv(scope, month, tz) {
   // Overall (all municipalities) gets municipality columns and a breakdown;
   // a single-municipality file is just that municipality's own report.
   const withMuni = !!scope.muni && scope.single == null;
-  const [totals, sensors, rows, munis] = await Promise.all([
+  const pestEnd = isCurrent ? Math.floor(Date.now() / 1000) + 1 : endSec;
+  const [totals, sensors, rows, munis, pestMap] = await Promise.all([
     db
       .prepare(
         `SELECT SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
@@ -316,11 +394,22 @@ export async function buildVibrationCsv(scope, month, tz) {
           )
           .all(...args)
       : Promise.resolve([]),
+    pestStateAt(scope, pestEnd),
   ]);
 
   // One spelling per municipality ("Mabini" / "mabini " are the same place).
   const muniName = new Map(munis.map((m) => [m.k, m.name]));
   const muniOf = (k) => muniName.get(k) ?? k;
+
+  // Sensors that have an infected / cleared tree but no readings this month.
+  const haveSensor = new Set(sensors.map((x) => x.piezo_id));
+  for (const [piezoId, p] of pestMap) {
+    if (!haveSensor.has(piezoId)) {
+      sensors.push({ piezo_id: piezoId, node_id: p.nodeId, node_name: p.nodeName, muni: p.muni, readings: 0, avg_grams: 0, peak_grams: 0 });
+    }
+  }
+  const infectedTotal = [...pestMap.values()].reduce((a, p) => a + p.infected, 0);
+  const clearedTotal = [...pestMap.values()].reduce((a, p) => a + p.cleared, 0);
 
   const readings = Number(totals?.readings ?? 0);
   if (readings === 0) {
@@ -364,6 +453,8 @@ export async function buildVibrationCsv(scope, month, tz) {
     csvLine(['Critical readings', critical]),
     csvLine(['Elevated readings', elevated]),
     csvLine(['Normal readings', Math.max(0, readings - critical - elevated)]),
+    csvLine([isCurrent ? 'Infected (now)' : 'Infected (end of month)', infectedTotal]),
+    csvLine([isCurrent ? 'Cleared (now)' : 'Cleared (end of month)', clearedTotal]),
     ...(withMuni
       ? [
           '',
@@ -379,7 +470,7 @@ export async function buildVibrationCsv(scope, month, tz) {
       : []),
     '',
     csvLine(['BY SENSOR']),
-    csvLine([...(withMuni ? ['Municipality'] : []), 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)']),
+    csvLine([...(withMuni ? ['Municipality'] : []), 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Infected', 'Cleared']),
     ...sensors
       .map((s) => ({ ...s, label: sensorLabel(s.piezo_id) }))
       .sort(
@@ -388,7 +479,19 @@ export async function buildVibrationCsv(scope, month, tz) {
           String(a.node_id).localeCompare(String(b.node_id)) ||
           a.label.localeCompare(b.label)
       )
-      .map((s) => csvLine([...(withMuni ? [muniOf(s.muni)] : []), s.node_name, s.label, Number(s.readings), r2(s.avg_grams), r2(s.peak_grams)])),
+      .map((s) => {
+        const pest = pestMap.get(s.piezo_id);
+        return csvLine([
+          ...(withMuni ? [muniOf(s.muni)] : []),
+          s.node_name,
+          s.label,
+          Number(s.readings),
+          r2(s.avg_grams),
+          r2(s.peak_grams),
+          pest?.infected ?? 0,
+          pest?.cleared ?? 0,
+        ]);
+      }),
     '',
     csvLine(['VIBRATION LOG - strongest reading in each 15-minute window (quiet windows are left out)']),
     csvLine(['Local time', ...(withMuni ? ['Municipality'] : []), 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Severity']),

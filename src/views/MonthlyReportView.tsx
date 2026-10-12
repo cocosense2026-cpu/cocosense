@@ -30,6 +30,9 @@ interface PiezoRow {
   readings: number;
   avgGrams: number;
   peakGrams: number;
+  /** Trees on this sensor marked Infected / Cleared as of the end of the month. */
+  infected: number;
+  cleared: number;
 }
 interface MonthReport {
   key: string;
@@ -311,13 +314,15 @@ const MonthCard: React.FC<{
               <div>
                 <p className="text-[10px] uppercase font-bold tracking-widest text-[#808080] mb-2">By sensor</p>
                 <div className="overflow-x-auto rounded border border-[#262626]">
-                  <table className="w-full text-xs min-w-[360px]">
+                  <table className="w-full text-xs min-w-[440px]">
                     <thead>
                       <tr className="bg-[#0A0A0A] text-[10px] uppercase tracking-wider text-[#808080]">
                         <th className="text-left font-bold px-3 py-2">Sensor</th>
                         <th className="text-right font-bold px-3 py-2">Readings</th>
                         <th className="text-right font-bold px-3 py-2">Average</th>
                         <th className="text-right font-bold px-3 py-2">Peak</th>
+                        <th className="text-right font-bold px-3 py-2">Infected</th>
+                        <th className="text-right font-bold px-3 py-2">Cleared</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#262626]">
@@ -341,6 +346,18 @@ const MonthCard: React.FC<{
                             }}
                           >
                             {p.peakGrams} g
+                          </td>
+                          <td
+                            className="px-3 py-2 text-right font-mono"
+                            style={{ color: p.infected > 0 ? COLORS.critical : undefined }}
+                          >
+                            {p.infected}
+                          </td>
+                          <td
+                            className="px-3 py-2 text-right font-mono"
+                            style={{ color: p.cleared > 0 ? COLORS.normal : undefined }}
+                          >
+                            {p.cleared}
                           </td>
                         </tr>
                       ))}

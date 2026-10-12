@@ -124,6 +124,7 @@ export async function deleteTree(tree) {
   statements.push([`DELETE FROM vibration_events WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM vibration_rollup WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM tree_piezo_state WHERE node_tree_id = ?`, [tree.id]]);
+  statements.push([`DELETE FROM tree_pest_events WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM node_trees WHERE id = ?`, [tree.id]]);
   await db.batch(statements);
   if (replacementId != null) await restampTree(replacementId);
@@ -166,6 +167,12 @@ export async function setPiezoState(treeId, piezoId, patch) {
          is_active = excluded.is_active, pest_status = excluded.pest_status, updated_at = excluded.updated_at`
     )
     .run(treeId, piezoId, next.active ? 1 : 0, next.pest);
+  // History for the Monthly Report's Infected / Cleared counts.
+  if ((next.pest ?? null) !== (cur.pest ?? null)) {
+    await db
+      .prepare(`INSERT INTO tree_pest_events (node_tree_id, piezo_sensor_id, status, at_ts) VALUES (?, ?, ?, strftime('%s','now'))`)
+      .run(treeId, piezoId, next.pest ?? 'RESET');
+  }
   return next;
 }
 
