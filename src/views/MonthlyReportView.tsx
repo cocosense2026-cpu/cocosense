@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ChevronDown, Download, FileText, Loader2, Lock, Radio, WifiOff } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Download, FileText, Loader2, Lock, MapPin, Radio, WifiOff } from 'lucide-react';
 import { adminApi } from '../admin/api';
 import { PageHero } from '../components/PageHero';
 import { PageFooterNote } from '../components/PageFooterNote';
 import { usePolling } from '../hooks/usePolling';
 import { VibrationStrengthChart, VibrationStrengthPoint } from '../components/VibrationStrengthChart';
 
-// Monthly Report -- month-by-month vibration across every farm owner's
-// hardware (server: GET /admin/reports/vibration).
+// Monthly Report -- month-by-month vibration for ONE municipality at a time
+// (picked at the top of the page; server: GET /admin/reports/vibration).
+// Downloads are different: the CSV always covers ALL municipalities together
+// (overall totals plus a per-municipality breakdown).
 //
 // The list is always newest first: the CURRENT month sits at the top and
 // is still collecting readings; every earlier month is closed and sits
@@ -53,7 +55,15 @@ interface MonthReport {
   series: number[];
   piezos: PiezoRow[];
 }
+interface MunicipalityInfo {
+  name: string;
+  owners: number;
+  nodes: number;
+}
 interface ReportData {
+  /** The municipality this report is for (null when no farm owner exists yet). */
+  municipality: string | null;
+  municipalities: MunicipalityInfo[];
   currentMonth: string;
   nodesCount: number;
   thresholds: { elevated: number; critical: number };
@@ -257,20 +267,20 @@ const MonthCard: React.FC<{
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4">
                 <p className="text-[11px] text-[#808080] leading-snug">
                   {month.isCurrent
-                    ? `${monthLabel(month)} so far — everything recorded up to now.`
-                    : `Full vibration record for ${monthLabel(month)}.`}
+                    ? `${monthLabel(month)} so far. The download covers all municipalities, not just ${data.municipality ?? 'this one'}.`
+                    : `The download covers all municipalities for ${monthLabel(month)}, not just ${data.municipality ?? 'this one'}.`}
                 </p>
                 <DownloadButton
-                  label={`Download ${monthLabel(month)}`}
+                  label={`Download ${monthLabel(month)} (all municipalities)`}
                   busy={downloading}
                   disabled={downloadLocked}
-                  title={`Download the ${monthLabel(month)} vibration report (CSV)`}
+                  title={`Download the overall ${monthLabel(month)} vibration report for all municipalities (CSV)`}
                   onClick={onDownload}
                 />
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <StatTile label="Readings" value={t.readings.toLocaleString()} hint="all sensors" />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <StatTile label="Readings" value={t.readings.toLocaleString()} hint={data.municipality ?? 'all sensors'} />
                 <StatTile label="Average strength" value={`${t.avgGrams} g`} hint={`${t.avgFrequencyHz} Hz avg`} />
                 <StatTile
                   label="Peak strength"
@@ -282,12 +292,6 @@ const MonthCard: React.FC<{
                       ? COLORS.elevated
                       : undefined
                   }
-                />
-                <StatTile
-                  label="Pest signatures"
-                  value={t.pestDetections.toLocaleString()}
-                  hint="feeding-pattern matches"
-                  color={t.pestDetections > 0 ? COLORS.critical : undefined}
                 />
               </div>
 
@@ -353,10 +357,15 @@ export const MonthlyReportView: React.FC = () => {
   // download failure, if any.
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  // Which municipality is on screen. null until the first load, which lets the
+  // server pick the first one alphabetically.
+  const [municipality, setMunicipality] = useState<string | null>(null);
+  const municipalityRef = useRef<string | null>(null);
+  municipalityRef.current = municipality;
 
   const load = useCallback(() => {
     adminApi
-      .vibrationReport()
+      .vibrationReport(municipalityRef.current)
       .then((res: ReportData) => {
         setData(res);
         setError(null);
@@ -378,7 +387,7 @@ export const MonthlyReportView: React.FC = () => {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, municipality]);
   // Picks up new readings, and the 1st-of-the-month rollover, without a refresh.
   usePolling(load, 60000);
 
@@ -389,6 +398,12 @@ export const MonthlyReportView: React.FC = () => {
       else next.add(key);
       return next;
     });
+
+  const pickMunicipality = (name: string) => {
+    if (name === municipality) return;
+    setData(null);
+    setMunicipality(name);
+  };
 
   const handleDownload = useCallback(
     async (key: string) => {
@@ -423,17 +438,17 @@ export const MonthlyReportView: React.FC = () => {
         eyebrow="Admin Console"
         subtitle="Monthly Report"
         title="Monthly Report"
-        description="A month-by-month summary of the vibration picked up by every farm owner's sensors. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list, and a fresh month starts at the top. Open any month to see its full record, and download it as a spreadsheet."
+        description="A month-by-month summary of the vibration picked up in one municipality at a time. Choose a municipality below. The current month stays at the top while readings come in; when a month ends it is closed and moves down the list. Downloads cover all municipalities together."
         actions={
           <DownloadButton
             variant="primary"
-            label="Download current report"
+            label="Download current report (all municipalities)"
             busy={!!currentMonth && downloadingKey === currentMonth.key}
             disabled={!currentMonth || currentEmpty || (!!downloadingKey && downloadingKey !== currentMonth.key)}
             title={
               currentEmpty
                 ? 'No vibration readings have been recorded this month yet'
-                : `Download the ${monthLabel(currentMonth!)} vibration report (CSV)`
+                : `Download the overall ${monthLabel(currentMonth!)} vibration report for all municipalities (CSV)`
             }
             onClick={() => currentMonth && handleDownload(currentMonth.key)}
           />
@@ -457,6 +472,43 @@ export const MonthlyReportView: React.FC = () => {
         </div>
       )}
 
+      {data && data.municipalities.length > 0 && (
+        <div className="rounded-lg bg-[#141414] border border-[#262626] p-4 sm:p-5">
+          <p className="text-[10px] uppercase font-bold tracking-widest text-[#808080] mb-2.5 flex items-center gap-1.5">
+            <MapPin className="w-3.5 h-3.5 text-[#16A34A]" /> Municipality
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {data.municipalities.map((m) => {
+              const active = m.name === data.municipality;
+              return (
+                <button
+                  key={m.name}
+                  type="button"
+                  onClick={() => pickMunicipality(m.name)}
+                  aria-pressed={active}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                    active
+                      ? 'bg-[#16A34A] border-[#16A34A] text-black'
+                      : 'bg-[#1A1A1A] border-[#333333] text-[#E0E0E0] hover:bg-[#222222]'
+                  }`}
+                >
+                  {m.name}
+                  <span className={`ml-2 font-mono text-[10px] ${active ? 'text-black/70' : 'text-[#808080]'}`}>
+                    {m.owners} {m.owners === 1 ? 'owner' : 'owners'} · {m.nodes} {m.nodes === 1 ? 'node' : 'nodes'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {data && data.municipalities.length === 0 && (
+        <div className="rounded-lg bg-[#141414] border border-[#262626] p-10 text-center text-xs text-[#808080]">
+          No farm owners are registered yet, so there is no municipality to report on.
+        </div>
+      )}
+
       {error && !data && (
         <div className="flex items-start gap-3 rounded bg-[#2B1B1B] border border-[#F44336]/30 px-4 py-3 text-xs text-[#F44336]">
           <WifiOff className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -470,7 +522,7 @@ export const MonthlyReportView: React.FC = () => {
         </div>
       )}
 
-      {data && (
+      {data && data.municipalities.length > 0 && (
         <div className="space-y-3">
           {data.months.map((m) => (
             <MonthCard
@@ -494,7 +546,7 @@ export const MonthlyReportView: React.FC = () => {
 
       <PageFooterNote
         icon={FileText}
-        text="Months follow your local calendar and cover every registered farm. Only readings from working sensors are counted, and a month's figures are final once it closes. Downloads are CSV files that open in Excel or Google Sheets, with a summary, a per-sensor breakdown and the full log for that month."
+        text="Months follow your local calendar. The page shows the municipality you picked; every download is the overall report for all municipalities, with the totals, a per-municipality breakdown, a per-sensor breakdown and the full log. Only readings from working sensors are counted, and a month's figures are final once it closes. Files open in Excel or Google Sheets."
       />
     </div>
   );

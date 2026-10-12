@@ -8,7 +8,6 @@ import {
   Users, 
   MapPinned, 
   CalendarRange, 
-  FileText, 
   Bell, 
   Settings, 
   X,
@@ -25,7 +24,6 @@ export type ActiveView =
   | 'activity'
   | 'municipalities'
   | 'monthly-report'
-  | 'reports'
   | 'notifications'
   | 'settings';
 
@@ -82,7 +80,6 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'activity' as ActiveView, label: 'Recent Activity', icon: Activity, badge: onlineOwnersCount > 0 ? `${onlineOwnersCount} LIVE` : null, liveTone: true },
     { id: 'municipalities' as ActiveView, label: 'Municipality Map', icon: MapPinned, badge: `${ownersCount}` },
     { id: 'monthly-report' as ActiveView, label: 'Monthly Report', icon: CalendarRange, badge: null },
-    { id: 'reports' as ActiveView, label: 'Bioacoustic Reports', icon: FileText, badge: null },
     { id: 'notifications' as ActiveView, label: 'Notifications', icon: Bell, badge: unreadCount > 0 ? `${unreadCount}` : null },
     { id: 'settings' as ActiveView, label: 'Settings & Security', icon: Settings, badge: null },
   ];

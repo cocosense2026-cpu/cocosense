@@ -33,8 +33,15 @@ export function ownerScope(ownerId) {
     args: [ownerId],
     join: '',
     nodeName: `n.name`,
+    muni: null,
+    muniKey: null,
   };
 }
+
+// The municipality an owner's farm is registered in, as one comparable value:
+// trimmed, and blank/missing becomes 'Unspecified'.
+const MUNI_NAME_SQL = `COALESCE(NULLIF(TRIM(fo.city_municipality), ''), 'Unspecified')`;
+const MUNI_KEY_SQL = `LOWER(${MUNI_NAME_SQL})`;
 
 // Admin view: every node that has an owner. Node names such as "Sensor 1"
 // repeat across owners, so the owner's name is appended to keep rows apart.
@@ -44,7 +51,40 @@ export function allOwnersScope() {
     args: [],
     join: `LEFT JOIN farm_owners fo ON n.owner_id = fo.id`,
     nodeName: `(n.name || ' - ' || COALESCE(fo.name, n.owner_id))`,
+    muni: MUNI_NAME_SQL,
+    muniKey: MUNI_KEY_SQL,
   };
+}
+
+// Admin Monthly Report: the nodes of ONE municipality (matched
+// case-insensitively on the owners' city/municipality). `name` is whatever the
+// admin picked; 'Unspecified' selects owners with no municipality on file.
+export function municipalityScope(name) {
+  const key = String(name ?? '').trim().toLowerCase();
+  return {
+    where: `n.owner_id IS NOT NULL AND ${MUNI_KEY_SQL} = ?`,
+    args: [key],
+    join: `LEFT JOIN farm_owners fo ON n.owner_id = fo.id`,
+    nodeName: `(n.name || ' - ' || COALESCE(fo.name, n.owner_id))`,
+    muni: MUNI_NAME_SQL,
+    muniKey: MUNI_KEY_SQL,
+  };
+}
+
+// Every municipality that has at least one farm owner, with how many owners
+// and master nodes it has -- the picker on the admin Monthly Report page.
+export async function listMunicipalities() {
+  const rows = await db
+    .prepare(
+      `SELECT ${MUNI_KEY_SQL} AS k, MIN(${MUNI_NAME_SQL}) AS name,
+              COUNT(DISTINCT fo.id) AS owners, COUNT(DISTINCT n.id) AS nodes
+         FROM farm_owners fo
+         LEFT JOIN master_nodes n ON n.owner_id = fo.id
+        GROUP BY k
+        ORDER BY (k = 'unspecified'), name COLLATE NOCASE`
+    )
+    .all();
+  return rows.map((r) => ({ name: r.name, owners: Number(r.owners), nodes: Number(r.nodes) }));
 }
 
 export function parseTz(raw) {
@@ -109,7 +149,7 @@ export async function buildVibrationReport(scope, tz) {
            ${base} GROUP BY month, r.piezo_sensor_id`
       )
       .all(modifier, ...scope.args, cutoff),
-    db.prepare(`SELECT COUNT(*) AS cnt FROM master_nodes n WHERE ${scope.where}`).get(...scope.args),
+    db.prepare(`SELECT COUNT(*) AS cnt FROM master_nodes n ${scope.join} WHERE ${scope.where}`).get(...scope.args),
   ]);
 
   const monthsByKey = new Map(monthRows.map((r) => [r.month, r]));
@@ -237,31 +277,47 @@ export async function buildVibrationCsv(scope, month, tz) {
   const base = baseSql(scope, `r.bucket_ts >= ? AND r.bucket_ts < ?`);
   const args = [...scope.args, startSec, endSec];
 
-  const [totals, sensors, rows] = await Promise.all([
+  const withMuni = !!scope.muni;
+  const [totals, sensors, rows, munis] = await Promise.all([
     db
       .prepare(
         `SELECT SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
                 MAX(r.grams_peak) AS peak_grams, SUM(r.hz_sum) / NULLIF(SUM(r.hz_n), 0) AS avg_hz,
-                SUM(r.pests) AS pests, SUM(r.critical) AS critical, SUM(r.elevated) AS elevated
+                SUM(r.critical) AS critical, SUM(r.elevated) AS elevated
            ${base}`
       )
       .get(...args),
     db
       .prepare(
         `SELECT r.piezo_sensor_id AS piezo_id, MAX(n.id) AS node_id, MAX(${scope.nodeName}) AS node_name,
+                ${withMuni ? `MAX(${scope.muniKey})` : `NULL`} AS muni,
                 SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
-                MAX(r.grams_peak) AS peak_grams, SUM(r.pests) AS pests
+                MAX(r.grams_peak) AS peak_grams
            ${base} GROUP BY r.piezo_sensor_id`
       )
       .all(...args),
     db
       .prepare(
         `SELECT r.bucket_ts, r.piezo_sensor_id AS piezo_id, n.id AS node_id, ${scope.nodeName} AS node_name,
-                r.readings, r.grams_sum, r.grams_peak, r.pests
+                ${withMuni ? scope.muniKey : `NULL`} AS muni, r.readings, r.grams_sum, r.grams_peak
            ${base} ORDER BY r.bucket_ts, n.id, r.piezo_sensor_id LIMIT 200000`
       )
       .all(...args),
+    withMuni
+      ? db
+          .prepare(
+            `SELECT ${scope.muniKey} AS k, MIN(${scope.muni}) AS name, COUNT(DISTINCT n.id) AS nodes, COUNT(DISTINCT n.owner_id) AS owners,
+                    SUM(r.readings) AS readings, SUM(r.grams_sum) / SUM(r.readings) AS avg_grams,
+                    MAX(r.grams_peak) AS peak_grams, SUM(r.critical) AS critical, SUM(r.elevated) AS elevated
+               ${base} GROUP BY ${scope.muniKey} ORDER BY (${scope.muniKey} = 'unspecified'), name COLLATE NOCASE`
+          )
+          .all(...args)
+      : Promise.resolve([]),
   ]);
+
+  // One spelling per municipality ("Mabini" / "mabini " are the same place).
+  const muniName = new Map(munis.map((m) => [m.k, m.name]));
+  const muniOf = (k) => muniName.get(k) ?? k;
 
   const readings = Number(totals?.readings ?? 0);
   if (readings === 0) {
@@ -282,8 +338,9 @@ export async function buildVibrationCsv(scope, month, tz) {
   const avgHz = totals.avg_hz == null ? null : Number(Number(totals.avg_hz).toFixed(1));
 
   const out = [
-    csvLine(['CocoSense Monthly Vibration Report']),
+    csvLine([withMuni ? 'CocoSense Monthly Vibration Report - All Municipalities (Overall)' : 'CocoSense Monthly Vibration Report']),
     csvLine(['Month', monthName]),
+    ...(withMuni ? [csvLine(['Municipalities included', munis.length])] : []),
     csvLine(['Status', isCurrent ? `In progress (day ${localNow.getUTCDate()} of ${daysInMonth})` : 'Closed']),
     csvLine(['Time zone', utcOffsetLabel(tz)]),
     csvLine(['Generated (local time)', localStamp(Math.floor(Date.now() / 1000), tz)]),
@@ -294,30 +351,47 @@ export async function buildVibrationCsv(scope, month, tz) {
     csvLine(['Average strength (g)', r2(totals.avg_grams)]),
     csvLine(['Peak strength (g)', r2(totals.peak_grams)]),
     ...(avgHz != null ? [csvLine(['Average frequency (Hz)', avgHz])] : []),
-    csvLine(['Pest signatures', Number(totals.pests ?? 0)]),
     csvLine(['Critical readings', critical]),
     csvLine(['Elevated readings', elevated]),
     csvLine(['Normal readings', Math.max(0, readings - critical - elevated)]),
+    ...(withMuni
+      ? [
+          '',
+          csvLine(['BY MUNICIPALITY']),
+          csvLine(['Municipality', 'Owners', 'Master nodes', 'Readings', 'Average (g)', 'Peak (g)', 'Critical readings', 'Elevated readings', 'Normal readings']),
+          ...munis.map((m) => {
+            const rd = Number(m.readings ?? 0);
+            const cr = Number(m.critical ?? 0);
+            const el = Number(m.elevated ?? 0);
+            return csvLine([m.name, Number(m.owners), Number(m.nodes), rd, r2(m.avg_grams), r2(m.peak_grams), cr, el, Math.max(0, rd - cr - el)]);
+          }),
+        ]
+      : []),
     '',
     csvLine(['BY SENSOR']),
-    csvLine(['Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Pest signatures']),
+    csvLine([...(withMuni ? ['Municipality'] : []), 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)']),
     ...sensors
       .map((s) => ({ ...s, label: sensorLabel(s.piezo_id) }))
-      .sort((a, b) => String(a.node_id).localeCompare(String(b.node_id)) || a.label.localeCompare(b.label))
-      .map((s) => csvLine([s.node_name, s.label, Number(s.readings), r2(s.avg_grams), r2(s.peak_grams), Number(s.pests ?? 0)])),
+      .sort(
+        (a, b) =>
+          muniOf(a.muni).localeCompare(muniOf(b.muni)) ||
+          String(a.node_id).localeCompare(String(b.node_id)) ||
+          a.label.localeCompare(b.label)
+      )
+      .map((s) => csvLine([...(withMuni ? [muniOf(s.muni)] : []), s.node_name, s.label, Number(s.readings), r2(s.avg_grams), r2(s.peak_grams)])),
     '',
     csvLine(['VIBRATION LOG - strongest reading in each 15-minute window (quiet windows are left out)']),
-    csvLine(['Local time', 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Severity', 'Pest signatures']),
+    csvLine(['Local time', ...(withMuni ? ['Municipality'] : []), 'Node', 'Sensor', 'Readings', 'Average (g)', 'Peak (g)', 'Severity']),
     ...rows.map((r) =>
       csvLine([
         localStamp(Number(r.bucket_ts), tz),
+        ...(withMuni ? [muniOf(r.muni)] : []),
         r.node_name,
         sensorLabel(r.piezo_id),
         Number(r.readings),
         r2(Number(r.grams_sum) / Math.max(1, Number(r.readings))),
         r2(r.grams_peak),
         severityForGrams(Number(r.grams_peak)),
-        Number(r.pests ?? 0),
       ])
     ),
   ];

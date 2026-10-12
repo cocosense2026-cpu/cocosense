@@ -3,7 +3,7 @@ import { db } from '../db.js';
 import { toCamel, validateAvatarDataUrl } from '../utils.js';
 import { verifyPassword, generateSessionToken, sessionExpiryIso } from '../auth.js';
 import { restampRowHash } from '../hash.js';
-import { allOwnersScope, buildVibrationReport, buildVibrationCsv, parseTz } from '../reports.js';
+import { allOwnersScope, municipalityScope, listMunicipalities, buildVibrationReport, buildVibrationCsv, parseTz } from '../reports.js';
 
 const router = Router();
 
@@ -119,12 +119,23 @@ router.patch('/admin/profile', requireAdminAuth, async (req, res) => {
 // ========== Monthly Report ==========
 // Month-by-month vibration report across EVERY farm owner's hardware, for the
 // admin console's "Monthly Report" page. See server/reports.js.
+// The report on screen is ONE municipality at a time (?municipality=Name; the
+// first one alphabetically when omitted). The response also lists every
+// municipality so the page can offer a picker.
 router.get('/admin/reports/vibration', requireAdminAuth, async (req, res) => {
-  res.json(await buildVibrationReport(allOwnersScope(), parseTz(req.query.tz)));
+  const municipalities = await listMunicipalities();
+  const asked = String(req.query.municipality ?? '').trim().toLowerCase();
+  const chosen = municipalities.find((m) => m.name.toLowerCase() === asked) ?? municipalities[0] ?? null;
+  const report = await buildVibrationReport(
+    chosen ? municipalityScope(chosen.name) : municipalityScope('\u0000none'),
+    parseTz(req.query.tz)
+  );
+  res.json({ ...report, municipality: chosen ? chosen.name : null, municipalities });
 });
 
 // GET /admin/reports/vibration/export?month=2026-08&tz=480 -> a CSV of that
-// month. A fetch with the bearer token (not a plain link) so it stays behind
+// month for ALL municipalities together (overall totals plus a per-municipality
+// breakdown), whichever municipality is open on screen. A fetch with the bearer token (not a plain link) so it stays behind
 // the admin login.
 router.get('/admin/reports/vibration/export', requireAdminAuth, async (req, res) => {
   const month = String(req.query.month ?? '');

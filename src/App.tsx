@@ -15,7 +15,6 @@ import { DashboardView } from './views/DashboardView';
 import { FarmOwnersView } from './views/FarmOwnersView';
 import { MunicipalityMapView } from './views/MunicipalityMapView';
 import { MonthlyReportView } from './views/MonthlyReportView';
-import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
 import { SettingsView } from './views/SettingsView';
 import { RecentActivityView } from './views/RecentActivityView';
@@ -408,16 +407,6 @@ export function App() {
           )}
 
           {currentView === 'monthly-report' && <MonthlyReportView />}
-
-          {currentView === 'reports' && (
-            <ReportsView
-              owners={owners}
-              nodes={nodes}
-              trees={trees}
-              alerts={alerts}
-              vibrationEvents={vibrationEvents}
-            />
-          )}
 
           {currentView === 'notifications' && (
             <NotificationsView

@@ -161,10 +161,16 @@ export const adminApi = {
       `/admin/activity/feed?${q.toString()}`
     );
   },
-  // Monthly Report: month-by-month vibration across every owner's hardware.
+  // Monthly Report: month-by-month vibration for ONE municipality (the first
+  // one when none is given); the response lists every municipality.
   // tz = minutes EAST of UTC so months are cut at the admin's local midnight.
-  vibrationReport: () => request<any>(`/admin/reports/vibration?tz=${-new Date().getTimezoneOffset()}`),
-  // One month as a CSV (Blob). A fetch with the bearer token rather than a
+  vibrationReport: (municipality?: string | null) =>
+    request<any>(
+      `/admin/reports/vibration?tz=${-new Date().getTimezoneOffset()}${
+        municipality ? `&municipality=${encodeURIComponent(municipality)}` : ''
+      }`
+    ),
+  // One month as a CSV (Blob) covering ALL municipalities (overall). A fetch with the bearer token rather than a
   // plain <a href>, so it stays behind the admin login.
   downloadVibrationReport: async (month: string): Promise<Blob> => {
     const token = getAdminToken();
