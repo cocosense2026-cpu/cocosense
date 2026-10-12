@@ -98,6 +98,14 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                     )}
                   </div>
                   <p className="text-xs text-[#E0E0E0] mt-0.5">{item.message}</p>
+                  {(item.ownerName || item.nodeId) && (
+                    <p className="text-[11px] mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="text-[#808080] uppercase font-bold tracking-wider text-[10px]">Farm owner</span>
+                      <span className="text-white font-semibold">{item.ownerName ?? 'Unknown owner'}</span>
+                      {item.ownerMunicipality && <span className="text-[#808080]">· {item.ownerMunicipality}</span>}
+                      {item.nodeId && <span className="text-[#808080] font-mono">· {item.nodeId}</span>}
+                    </p>
+                  )}
                   <div className="text-[11px] text-[#808080] font-mono mt-1.5 flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
                     <span>{item.timestamp || item.createdAt}</span>

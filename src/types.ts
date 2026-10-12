@@ -119,6 +119,10 @@ export interface NotificationItem {
   // database from before this change.
   category: 'PEST' | string;
   severity?: string;
+  /** Whose vibration this is (looked up by the server). */
+  ownerName?: string | null;
+  ownerMunicipality?: string | null;
+  nodeId?: string | null;
   createdAt?: string;
   timestamp?: string;
   isRead?: boolean;

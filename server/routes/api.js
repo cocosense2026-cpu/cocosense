@@ -532,8 +532,34 @@ router.patch('/alerts/:id/review', async (req, res) => {
 });
 
 // ---------- Notifications ----------
+// Each notification also says WHOSE vibration it is. Pest notifications don't
+// store an owner, only text like "Sector 1 (MN-STOCK-0001) (Tree 2) matched
+// ...", so the master node named in the message is looked up to find its farm
+// owner (rows that do carry an owner_id use that directly). Done here, when
+// reading, so older notifications get it too and no stored row has to change.
 router.get('/notifications', async (req, res) => {
-  res.json(toCamel(await db.prepare(`SELECT * FROM notifications ORDER BY created_at DESC`).all()));
+  const [rows, owners, nodes] = await Promise.all([
+    db.prepare(`SELECT * FROM notifications ORDER BY created_at DESC`).all(),
+    db.prepare(`SELECT id, name, city_municipality FROM farm_owners`).all(),
+    db.prepare(`SELECT id, owner_id FROM master_nodes WHERE owner_id IS NOT NULL`).all(),
+  ]);
+  const ownerById = new Map(owners.map((o) => [o.id, o]));
+  const ownerOfNode = new Map(nodes.map((n) => [n.id, n.owner_id]));
+  const nodeIds = [...ownerOfNode.keys()].sort((a, b) => b.length - a.length);
+
+  res.json(
+    toCamel(rows).map((n) => {
+      const text = `${n.message ?? ''}`;
+      const nodeId = nodeIds.find((id) => text.includes(id)) ?? null;
+      const owner = ownerById.get(n.ownerId ?? (nodeId ? ownerOfNode.get(nodeId) : undefined));
+      return {
+        ...n,
+        nodeId,
+        ownerName: owner?.name ?? null,
+        ownerMunicipality: owner?.city_municipality ? String(owner.city_municipality).trim() : null,
+      };
+    })
+  );
 });
 
 router.patch('/notifications/:id/read', async (req, res) => {
