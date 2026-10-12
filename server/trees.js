@@ -125,6 +125,7 @@ export async function deleteTree(tree) {
   statements.push([`DELETE FROM vibration_rollup WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM tree_piezo_state WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM tree_pest_events WHERE node_tree_id = ?`, [tree.id]]);
+  statements.push([`DELETE FROM tree_piezo_auto WHERE node_tree_id = ?`, [tree.id]]);
   statements.push([`DELETE FROM node_trees WHERE id = ?`, [tree.id]]);
   await db.batch(statements);
   if (replacementId != null) await restampTree(replacementId);
@@ -153,7 +154,7 @@ export async function piezoStatesForTrees(treeIds) {
 export const DEFAULT_PIEZO_STATE = { active: true, pest: null };
 
 // Applies a partial change ({active?, pest?}) on top of the stored state.
-export async function setPiezoState(treeId, piezoId, patch) {
+export async function setPiezoState(treeId, piezoId, patch, opts = {}) {
   const cur = (await piezoStatesForTrees([treeId])).get(`${treeId}:${piezoId}`) ?? DEFAULT_PIEZO_STATE;
   const next = {
     active: patch.active !== undefined ? !!patch.active : cur.active,
@@ -167,6 +168,14 @@ export async function setPiezoState(treeId, piezoId, patch) {
          is_active = excluded.is_active, pest_status = excluded.pest_status, updated_at = excluded.updated_at`
     )
     .run(treeId, piezoId, next.active ? 1 : 0, next.pest);
+  // A change made by the owner (not by autoPest.js) restarts the automatic
+  // counting for this piezo, so e.g. pressing Cleared while the readings are
+  // still high doesn't instantly flip it back to Infected.
+  if (!opts.auto) {
+    await db
+      .prepare(`DELETE FROM tree_piezo_auto WHERE node_tree_id = ? AND piezo_sensor_id = ?`)
+      .run(treeId, piezoId);
+  }
   // History for the Monthly Report's Infected / Cleared counts.
   if ((next.pest ?? null) !== (cur.pest ?? null)) {
     await db

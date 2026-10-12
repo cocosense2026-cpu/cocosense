@@ -5,6 +5,7 @@ import { restampRowHash } from '../hash.js';
 import { notifyOwner } from '../notify.js';
 import { recordReading } from '../rollup.js';
 import { ensureActiveTree } from '../trees.js';
+import { applyAutoPestStatus } from '../autoPest.js';
 
 // Alert History is a review queue, not a permanent archive -- capping
 // it keeps the admin/owner UI scrollable and the table from growing
@@ -221,6 +222,28 @@ router.post('/ingest-vibration', async (req, res) => {
       await restampRowHash(db, 'master_nodes', 'id', node_id);
     })(),
   ]);
+
+  // ---- Automatic Infected / Cleared (8 elevated-or-critical readings in a
+  //      row -> Infected; 10 minutes of only Normal -> Cleared). Different
+  //      piezos run in parallel; readings of the same piezo in order. A
+  //      failure here must never fail the packet. ----
+  if (nodeTreeId != null && ownerId) {
+    const byPiezo = new Map();
+    for (const r of readings) {
+      if (r.piezoOff) continue;
+      if (!byPiezo.has(r.piezoSensorIdValue)) byPiezo.set(r.piezoSensorIdValue, []);
+      byPiezo.get(r.piezoSensorIdValue).push(r);
+    }
+    await Promise.all(
+      [...byPiezo.entries()].map(async ([piezoId, list]) => {
+        try {
+          for (const r of list) await applyAutoPestStatus(nodeTreeId, piezoId, r.severity);
+        } catch (err) {
+          console.warn('[ingest] auto infected/cleared failed:', err.message);
+        }
+      })
+    );
+  }
 
   // ---- Alerts: sequential on purpose, so the per-node cooldown check sees
   //      an alert inserted by an earlier piezo in this same packet ----

@@ -409,6 +409,20 @@ CREATE TABLE IF NOT EXISTS owner_hidden_items (
   PRIMARY KEY (owner_id, item_type, item_id)
 );
 
+-- Running state for the automatic Infected / Cleared rule (autoPest.js): how
+-- many Elevated/Critical readings in a row a piezo has had on a tree, and
+-- since when it has been reading only Normal. Safe to lose -- it just starts
+-- counting again.
+CREATE TABLE IF NOT EXISTS tree_piezo_auto (
+  node_tree_id    INTEGER NOT NULL,
+  piezo_sensor_id TEXT    NOT NULL,
+  streak          INTEGER NOT NULL DEFAULT 0,
+  normal_since    INTEGER,
+  settled         INTEGER NOT NULL DEFAULT 0,
+  last_ts         INTEGER,
+  PRIMARY KEY (node_tree_id, piezo_sensor_id)
+);
+
 -- Every time an owner changes a piezo's Infected / Cleared note on a tree, one
 -- row lands here (status 'INFECTED', 'CLEARED', or 'RESET' when the note is
 -- removed). tree_piezo_state only holds the CURRENT note, so this history is
